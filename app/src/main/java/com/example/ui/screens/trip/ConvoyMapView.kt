@@ -3,14 +3,11 @@ package com.example.ui.screens.trip
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -31,7 +27,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,6 +71,7 @@ fun ConvoyMapView(
     activeSpeakerName: String?,
     selfColorHex: String = "#0EA5E9",
     selfClientId: String = "",
+    selfDisplayName: String = "",
     marks: Map<String, MapMark> = emptyMap(),
     sharedRoutes: Map<String, SharedRoute> = emptyMap(),
     onLongPressMark: (latitude: Double, longitude: Double) -> Unit,
@@ -334,8 +330,8 @@ fun ConvoyMapView(
         }
     }
 
-    // 3. Synchronize Map Marks
-    LaunchedEffect(isMapReady, marks) {
+    // 3. Synchronize Map Marks (skip dest duplicate — radiating overlay owns that spot)
+    LaunchedEffect(isMapReady, marks, destination?.latitude, destination?.longitude) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isMapReady) return@LaunchedEffect
 
@@ -344,7 +340,14 @@ fun ConvoyMapView(
                 try { map.removeMarker(it) } catch (_: Exception) {}
             }
             val newMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
+            val dest = destination
             marks.values.forEach { mark ->
+                if (dest != null &&
+                    kotlin.math.abs(mark.latitude - dest.latitude) < 1e-6 &&
+                    kotlin.math.abs(mark.longitude - dest.longitude) < 1e-6
+                ) {
+                    return@forEach
+                }
                 val icon = createMarkPinIcon(context, mark.displayName, mark.color)
                 val opt = MarkerOptions()
                     .position(LatLng(mark.latitude, mark.longitude))
@@ -359,7 +362,7 @@ fun ConvoyMapView(
     }
 
     // 4. Synchronize Convoy Member Markers
-    LaunchedEffect(isMapReady, members) {
+    LaunchedEffect(isMapReady, members, selfClientId) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isMapReady) return@LaunchedEffect
 
@@ -369,6 +372,7 @@ fun ConvoyMapView(
             }
             val newMemberMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
             members.forEach { member ->
+                if (member.id == selfClientId) return@forEach
                 val mLat = member.latitude
                 val mLng = member.longitude
                 if (mLat != null && mLng != null && mLat != 0.0 && mLng != 0.0) {
@@ -423,8 +427,9 @@ fun ConvoyMapView(
                     heading = currentLocation.heading,
                     mapBearing = currentMapBearing,
                     userColor = userColor,
+                    initial = selfDisplayName.trim().take(1).uppercase().ifEmpty { "•" },
                     modifier = Modifier.offset {
-                        val sizeDp = if (isNavigating) 60.dp else 48.dp
+                        val sizeDp = if (isNavigating) 60.dp else 52.dp
                         val halfPx = with(density) { (sizeDp / 2f).toPx() }
                         IntOffset(
                             x = (pt.x - halfPx).roundToInt(),
@@ -435,7 +440,7 @@ fun ConvoyMapView(
             }
         }
 
-        // Glowing Radiating Destination Marker Overlay (Small glowing circle in user's color with radiating outer circle)
+        // Destination: initial circle + radiating rings (single marker)
         destination?.let { dest ->
             destScreenPoint?.let { pt ->
                 val density = LocalDensity.current
@@ -446,6 +451,9 @@ fun ConvoyMapView(
                 } catch (_: Exception) {
                     Color(0xFF0EA5E9)
                 }
+                val destInitial = dest.updatedByName
+                    .ifBlank { selfDisplayName }
+                    .trim().take(1).uppercase().ifEmpty { "•" }
 
                 Box(
                     modifier = Modifier
@@ -454,7 +462,7 @@ fun ConvoyMapView(
                 ) {
                     RadiatingTargetMarker(
                         color = targetColor,
-                        label = dest.label ?: "Destination",
+                        initial = destInitial,
                         modifier = Modifier
                             .offset {
                                 IntOffset(
@@ -609,241 +617,6 @@ fun ConvoyMapView(
                 }
             }
         }
-    }
-}
-
-/**
- * Creates the user's location marker icon matching the classic Google Maps / Flutter v1 style:
- * - When Navigating: High-contrast 3D GPS navigation arrow (yellow/gold chevron with soft shadow and white border)
- *   oriented dynamically according to vehicle heading.
- * - When Idle: Iconic GPS location puck (accuracy halo, directional forward beam, white ring, and vibrant blue core).
- */
-private fun createSelfLocationMarkerIcon(
-    context: Context,
-    heading: Double,
-    isNavigating: Boolean,
-    colorHex: String
-): Icon? {
-    return try {
-        val density = context.resources.displayMetrics.density
-        val sizeDp = if (isNavigating) 56 else 52
-        val sizePx = (sizeDp * density).toInt()
-        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-
-        val cx = sizePx / 2f
-        val cy = sizePx / 2f
-        val paint = Paint().apply { isAntiAlias = true }
-
-        val mainColor = try {
-            android.graphics.Color.parseColor(colorHex)
-        } catch (_: Exception) {
-            android.graphics.Color.parseColor("#0EA5E9")
-        }
-
-        // Rotate canvas to match device / vehicle heading
-        canvas.save()
-        canvas.rotate(heading.toFloat(), cx, cy)
-
-        if (isNavigating) {
-            // --- 1. 3D GPS NAVIGATION VEHICLE ARROW ---
-            // Soft drop shadow under the base
-            paint.color = android.graphics.Color.parseColor("#44000000")
-            paint.style = Paint.Style.FILL
-            canvas.drawOval(
-                RectF(
-                    cx - (15 * density),
-                    cy + (8 * density),
-                    cx + (15 * density),
-                    cy + (17 * density)
-                ),
-                paint
-            )
-
-            // Arrow shape (sleek delta wing / chevron pointing up)
-            val arrowPath = Path().apply {
-                moveTo(cx, cy - (19 * density)) // Needle tip
-                lineTo(cx + (16 * density), cy + (13 * density)) // Bottom right wing
-                lineTo(cx, cy + (7 * density)) // Inner notch
-                lineTo(cx - (16 * density), cy + (13 * density)) // Bottom left wing
-                close()
-            }
-
-            // Outer thick rounded white plate
-            paint.color = android.graphics.Color.WHITE
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 6.5f * density
-            paint.strokeJoin = Paint.Join.ROUND
-            paint.strokeCap = Paint.Cap.ROUND
-            canvas.drawPath(arrowPath, paint)
-
-            paint.style = Paint.Style.FILL
-            canvas.drawPath(arrowPath, paint)
-
-            // Inner vibrant navigation face (#FBBF24 Amber/Gold navigation arrow)
-            val navColor = android.graphics.Color.parseColor("#FBBF24")
-            paint.color = navColor
-            paint.style = Paint.Style.FILL
-            val innerPath = Path().apply {
-                moveTo(cx, cy - (15 * density))
-                lineTo(cx + (12 * density), cy + (11 * density))
-                lineTo(cx, cy + (6 * density))
-                lineTo(cx - (12 * density), cy + (11 * density))
-                close()
-            }
-            canvas.drawPath(innerPath, paint)
-
-            // Spine highlight
-            paint.color = android.graphics.Color.WHITE
-            paint.strokeWidth = 2f * density
-            paint.style = Paint.Style.STROKE
-            canvas.drawLine(cx, cy - (12 * density), cx, cy + (6 * density), paint)
-
-        } else {
-            // --- 2. CLASSIC GPS LOCATION PUCK (Idle / Browsing) ---
-            // A. Directional Heading Cone (pointing up along heading)
-            val conePath = Path().apply {
-                moveTo(cx, cy - (23 * density)) // tip of cone
-                lineTo(cx - (13 * density), cy)
-                quadTo(cx, cy - (4 * density), cx + (13 * density), cy)
-                close()
-            }
-            paint.color = android.graphics.Color.parseColor("#550EA5E9")
-            paint.style = Paint.Style.FILL
-            canvas.drawPath(conePath, paint)
-
-            // B. Accuracy Halo Ring
-            paint.color = android.graphics.Color.parseColor("#330EA5E9")
-            canvas.drawCircle(cx, cy, 18 * density, paint)
-
-            // C. Ground Shadow under puck
-            paint.color = android.graphics.Color.parseColor("#33000000")
-            canvas.drawCircle(cx, cy + (1.5f * density), 9.5f * density, paint)
-
-            // D. Outer White Border
-            paint.color = android.graphics.Color.WHITE
-            canvas.drawCircle(cx, cy, 9f * density, paint)
-
-            // E. Inner Core (User's Theme Color / Vibrant Blue)
-            paint.color = mainColor
-            canvas.drawCircle(cx, cy, 6.5f * density, paint)
-
-            // F. Bright Center Dot
-            paint.color = android.graphics.Color.WHITE
-            canvas.drawCircle(cx, cy, 2.2f * density, paint)
-        }
-
-        canvas.restore()
-
-        IconFactory.getInstance(context).fromBitmap(bitmap)
-    } catch (e: Exception) {
-        null
-    }
-}
-
-/**
- * Creates the destination marker matching the classic Google Maps / Flutter v1 teardrop pin:
- * - Smooth cubic-bezier teardrop shape with needle tip pointing directly at the coordinate.
- * - Soft ground shadow ellipse under the tip.
- * - Vibrant crimson red body (#E11D48 / #DC2626) with inner concentric white ring and dark core.
- */
-private fun createDestinationMarkerIcon(
-    context: Context,
-    label: String,
-    colorHex: String
-): Icon? {
-    return try {
-        val density = context.resources.displayMetrics.density
-        val wDp = 48
-        val hDp = 64
-        val wPx = (wDp * density).toInt()
-        val hPx = (hDp * density).toInt()
-        val bitmap = Bitmap.createBitmap(wPx, hPx, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-
-        val cx = wPx / 2f
-        val paint = Paint().apply { isAntiAlias = true }
-
-        val destColor = try {
-            android.graphics.Color.parseColor(colorHex)
-        } catch (_: Exception) {
-            android.graphics.Color.parseColor("#E11D48") // Rich crimson red
-        }
-
-        // 1. Ground Shadow (soft drop shadow ellipse under the needle tip)
-        paint.color = android.graphics.Color.parseColor("#4D000000")
-        paint.style = Paint.Style.FILL
-        canvas.drawOval(
-            RectF(
-                cx - (13 * density),
-                hPx - (7 * density),
-                cx + (13 * density),
-                hPx - (1 * density)
-            ),
-            paint
-        )
-
-        // 2. Teardrop Pin Shape (Classic Google Maps teardrop)
-        val headCenterY = 20 * density
-        val headRadius = 15 * density
-        val tipY = hPx - (4.5f * density)
-
-        val teardrop = Path().apply {
-            moveTo(cx, tipY)
-            // Left curve from tip to the bulb
-            cubicTo(
-                cx - (2 * density), tipY - (14 * density),
-                cx - headRadius, headCenterY + (10 * density),
-                cx - headRadius, headCenterY
-            )
-            // Top rounded arc
-            arcTo(
-                RectF(
-                    cx - headRadius,
-                    headCenterY - headRadius,
-                    cx + headRadius,
-                    headCenterY + headRadius
-                ),
-                180f,
-                180f,
-                false
-            )
-            // Right curve from bulb back down to tip
-            cubicTo(
-                cx + headRadius, headCenterY + (10 * density),
-                cx + (2 * density), tipY - (14 * density),
-                cx, tipY
-            )
-            close()
-        }
-
-        // Draw pin subtle dark border
-        paint.color = android.graphics.Color.parseColor("#33000000")
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 2f * density
-        canvas.drawPath(teardrop, paint)
-
-        // Draw main teardrop body
-        paint.color = destColor
-        paint.style = Paint.Style.FILL
-        canvas.drawPath(teardrop, paint)
-
-        // 3. Inner Concentric Ring & Disc (Classic destination hole)
-        // White inner ring
-        paint.color = android.graphics.Color.WHITE
-        canvas.drawCircle(cx, headCenterY, 6.5f * density, paint)
-
-        // Inner dark red / maroon core
-        paint.color = android.graphics.Color.parseColor("#881337")
-        canvas.drawCircle(cx, headCenterY, 4f * density, paint)
-
-        // Tiny white glossy reflection spark
-        paint.color = android.graphics.Color.WHITE
-        canvas.drawCircle(cx - (1.2f * density), headCenterY - (1.2f * density), 1.2f * density, paint)
-
-        IconFactory.getInstance(context).fromBitmap(bitmap)
-    } catch (e: Exception) {
-        null
     }
 }
 
@@ -1013,18 +786,16 @@ private fun createMarkPinIcon(
 }
 
 /**
- * Target Destination Marker matching the requested style:
- * "A small, glowing circle in the user's color, with another circle of the same color radiating outward from it at a specific frequency."
+ * Destination marker: user-initial circle with radiating rings.
  */
 @Composable
 fun RadiatingTargetMarker(
     color: Color,
-    label: String,
+    initial: String,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "target_radiating_beacon")
 
-    // Primary radiating wave circle: expands outward from the center circle and fades
     val wave1Progress by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -1035,7 +806,6 @@ fun RadiatingTargetMarker(
         label = "wave1"
     )
 
-    // Secondary radiating wave circle: offset by half a cycle for continuous wave pulsation
     val wave2Progress by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -1046,117 +816,50 @@ fun RadiatingTargetMarker(
         label = "wave2"
     )
 
-    // Gentle rhythmic breathing pulse on the glowing inner core
-    val corePulse by infiniteTransition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "core_pulse"
-    )
-
     Box(
         modifier = modifier.size(130.dp),
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val center = Offset(size.width / 2f, size.height / 2f)
+            val coreR = 14.dp.toPx()
 
-            // 1. Primary circle radiating outward at the specific frequency
-            val r1 = 9.dp.toPx() + (wave1Progress * 46.dp.toPx())
-            val alpha1 = (1f - wave1Progress).coerceIn(0f, 1f) * 0.85f
+            val r1 = coreR + (wave1Progress * 42.dp.toPx())
             drawCircle(
-                color = color.copy(alpha = alpha1),
+                color = color.copy(alpha = (1f - wave1Progress).coerceIn(0f, 1f) * 0.85f),
                 radius = r1,
                 center = center,
                 style = Stroke(width = 2.4.dp.toPx())
             )
 
-            // 2. Secondary circle radiating outward
-            val r2 = 9.dp.toPx() + (wave2Progress * 46.dp.toPx())
-            val alpha2 = (1f - wave2Progress).coerceIn(0f, 1f) * 0.85f
+            val r2 = coreR + (wave2Progress * 42.dp.toPx())
             drawCircle(
-                color = color.copy(alpha = alpha2),
+                color = color.copy(alpha = (1f - wave2Progress).coerceIn(0f, 1f) * 0.85f),
                 radius = r2,
                 center = center,
                 style = Stroke(width = 2.0.dp.toPx())
             )
 
-            // 3. Ambient soft radiant glow around the small core
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        color.copy(alpha = 0.60f),
-                        color.copy(alpha = 0.22f),
-                        Color.Transparent
-                    ),
-                    center = center,
-                    radius = 24.dp.toPx()
-                ),
-                radius = 24.dp.toPx(),
-                center = center
-            )
-
-            // 4. Ground drop shadow
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.35f),
-                radius = 10.dp.toPx(),
+                color = Color.Black.copy(alpha = 0.3f),
+                radius = coreR,
                 center = Offset(center.x, center.y + 1.5.dp.toPx())
             )
-
-            // 5. Outer crisp white ring
-            drawCircle(
-                color = Color.White,
-                radius = 8.5.dp.toPx() * corePulse,
-                center = center
-            )
-
-            // 6. Small glowing circle in user's color
-            drawCircle(
-                color = color,
-                radius = 6.5.dp.toPx() * corePulse,
-                center = center
-            )
-
-            // 7. Bright center core glint
-            drawCircle(
-                color = Color.White,
-                radius = 2.2.dp.toPx(),
-                center = center
-            )
+            drawCircle(color = Color.White, radius = coreR + 2.5.dp.toPx(), center = center)
+            drawCircle(color = color, radius = coreR, center = center)
         }
 
-        // Compact Destination Tag pill
-        if (label.isNotBlank()) {
-            Surface(
-                color = Color.Black.copy(alpha = 0.82f),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, color.copy(alpha = 0.9f)),
-                shadowElevation = 6.dp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 10.dp)
-            ) {
-                Text(
-                    text = label,
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.5.dp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
+        Text(
+            text = initial,
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
 /**
- * High-performance, zero-flicker vehicle marker overlay.
- * - In Driving Mode: 3D Golden Navigation Vehicle Chevron facing forwards along the road.
- * - In Idle/Browsing Mode: GPS Puck with compass-oriented directional heading cone and accuracy halo.
+ * Self overlay: nav chevron while driving; idle = initial circle + facing triangle (O>).
  */
 @Composable
 fun SelfPuckOrVehicleArrow(
@@ -1164,22 +867,20 @@ fun SelfPuckOrVehicleArrow(
     heading: Double,
     mapBearing: Double,
     userColor: Color,
+    initial: String,
     modifier: Modifier = Modifier
 ) {
     if (isNavigating) {
-        // 3D Navigation Vehicle Arrow (faces forward along the road)
         androidx.compose.foundation.Canvas(modifier = modifier.size(60.dp)) {
             val cx = size.width / 2f
             val cy = size.height / 2f
 
-            // 1. Soft ground drop shadow
             drawCircle(
                 color = Color.Black.copy(alpha = 0.28f),
                 radius = 24.dp.toPx(),
                 center = Offset(cx, cy + 4.dp.toPx())
             )
 
-            // 2. Outer bold white plate (sleek chevron/arrow)
             val outerPath = androidx.compose.ui.graphics.Path().apply {
                 moveTo(cx, cy - 22.dp.toPx())
                 lineTo(cx + 18.dp.toPx(), cy + 16.dp.toPx())
@@ -1187,12 +888,8 @@ fun SelfPuckOrVehicleArrow(
                 lineTo(cx - 18.dp.toPx(), cy + 16.dp.toPx())
                 close()
             }
-            drawPath(
-                path = outerPath,
-                color = Color.White
-            )
+            drawPath(path = outerPath, color = Color.White)
 
-            // 3. Inner Vehicle Body (Golden Amber / high contrast navigation color)
             val innerPath = androidx.compose.ui.graphics.Path().apply {
                 moveTo(cx, cy - 18.dp.toPx())
                 lineTo(cx + 14.dp.toPx(), cy + 13.dp.toPx())
@@ -1200,78 +897,59 @@ fun SelfPuckOrVehicleArrow(
                 lineTo(cx - 14.dp.toPx(), cy + 13.dp.toPx())
                 close()
             }
-            drawPath(
-                path = innerPath,
-                color = CaravanAmber
-            )
+            drawPath(path = innerPath, color = CaravanAmber)
 
-            // 4. Center Spine Highlight
             val spinePath = androidx.compose.ui.graphics.Path().apply {
                 moveTo(cx, cy - 18.dp.toPx())
                 lineTo(cx + 1.5.dp.toPx(), cy + 7.dp.toPx())
                 lineTo(cx - 1.5.dp.toPx(), cy + 7.dp.toPx())
                 close()
             }
-            drawPath(
-                path = spinePath,
-                color = Color.White.copy(alpha = 0.75f)
-            )
+            drawPath(path = spinePath, color = Color.White.copy(alpha = 0.75f))
         }
     } else {
-        // Browsing mode: Modern GPS Puck with Directional Heading Cone
         val relativeHeading = ((heading - mapBearing + 360.0) % 360.0).toFloat()
 
-        androidx.compose.foundation.Canvas(modifier = modifier.size(48.dp)) {
-            val cx = size.width / 2f
-            val cy = size.height / 2f
+        Box(
+            modifier = modifier.size(52.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                val coreR = 12.dp.toPx()
 
-            // 1. Directional Heading Cone (rotated to compass heading)
-            rotate(degrees = relativeHeading, pivot = Offset(cx, cy)) {
-                val conePath = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(cx, cy)
-                    lineTo(cx - 13.dp.toPx(), cy - 22.dp.toPx())
-                    lineTo(cx + 13.dp.toPx(), cy - 22.dp.toPx())
-                    close()
-                }
-                drawPath(
-                    path = conePath,
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            userColor.copy(alpha = 0.45f),
-                            Color.Transparent
-                        ),
-                        startY = cy - 22.dp.toPx(),
-                        endY = cy
+                rotate(degrees = relativeHeading, pivot = Offset(cx, cy)) {
+                    // Small forward triangle (O>) — tip points in heading direction
+                    val baseY = cy - coreR - 1.dp.toPx()
+                    val tri = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(cx, baseY - 9.dp.toPx())
+                        lineTo(cx + 5.5.dp.toPx(), baseY)
+                        lineTo(cx - 5.5.dp.toPx(), baseY)
+                        close()
+                    }
+                    drawPath(path = tri, color = userColor)
+                    drawPath(
+                        path = tri,
+                        color = Color.White,
+                        style = Stroke(width = 1.5.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round)
                     )
+                }
+
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.28f),
+                    radius = coreR,
+                    center = Offset(cx, cy + 1.2.dp.toPx())
                 )
+                drawCircle(color = Color.White, radius = coreR + 2.2.dp.toPx(), center = Offset(cx, cy))
+                drawCircle(color = userColor, radius = coreR, center = Offset(cx, cy))
             }
 
-            // 2. Outer Soft Halo
-            drawCircle(
-                color = userColor.copy(alpha = 0.22f),
-                radius = 16.dp.toPx(),
-                center = Offset(cx, cy)
-            )
-
-            // 3. Crisp White Puck Border
-            drawCircle(
+            Text(
+                text = initial,
                 color = Color.White,
-                radius = 11.dp.toPx(),
-                center = Offset(cx, cy)
-            )
-
-            // 4. Vibrant User Color Core
-            drawCircle(
-                color = userColor,
-                radius = 8.5.dp.toPx(),
-                center = Offset(cx, cy)
-            )
-
-            // 5. Center White Pip
-            drawCircle(
-                color = Color.White,
-                radius = 3.dp.toPx(),
-                center = Offset(cx, cy)
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
             )
         }
     }

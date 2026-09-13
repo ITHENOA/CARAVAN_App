@@ -66,6 +66,7 @@ fun TripScreen(
             activeSpeakerName = tripState.activeSpeakerName,
             selfColorHex = userProfile.avatarColor,
             selfClientId = userProfile.clientId,
+            selfDisplayName = userProfile.displayName,
             marks = tripState.marks,
             sharedRoutes = tripState.sharedRoutes,
             onLongPressMark = { lat, lng ->

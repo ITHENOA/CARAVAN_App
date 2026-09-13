@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="action_create_convoy">Create Convoy Trip</string>
+    <string name="action_join_convoy">Join Convoy with Code</string>
+    <string name="action_rejoin_convoy">Rejoin Convoy</string>
+    <string name="app_name">Caravan</string>
+    <string name="app_tagline">Multi-vehicle convoy coordination</string>
+    <string name="error_location_permission">Location permission required for convoy telemetry</string>
+    <string name="ptt_push_to_talk">PUSH TO TALK</string>
+    <string name="ptt_transmitting">TRANSMITTING</string>
+    <style name="Theme.Caravan" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
