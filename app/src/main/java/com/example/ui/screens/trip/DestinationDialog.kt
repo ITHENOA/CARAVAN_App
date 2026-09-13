@@ -151,9 +151,12 @@ fun DestinationDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val lat = latStr.toDoubleOrNull() ?: (userLocation.latitude + 0.02)
-                    val lng = lngStr.toDoubleOrNull() ?: (userLocation.longitude + 0.02)
-                    onSetDestination(lat, lng, label)
+                    val cleanLat = latStr.replace(',', '.').trim()
+                    val cleanLng = lngStr.replace(',', '.').trim()
+                    val lat = cleanLat.toDoubleOrNull() ?: (userLocation.latitude + 0.02)
+                    val lng = cleanLng.toDoubleOrNull() ?: (userLocation.longitude + 0.02)
+                    val safeLabel = if (label.isNotBlank()) label.trim() else "Destination"
+                    onSetDestination(lat.coerceIn(-85.0, 85.0), lng.coerceIn(-180.0, 180.0), safeLabel)
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = CaravanAmber),

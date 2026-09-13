@@ -40,6 +40,7 @@ fun ConvoyTopBar(
     memberCount: Int,
     isDarkMode: Boolean = false,
     onToggleDarkMode: () -> Unit = {},
+    onOpenDestinationDialog: () -> Unit = {},
     onToggleFleetList: () -> Unit,
     onOpenSettings: () -> Unit,
     onLeaveTrip: () -> Unit,
@@ -104,11 +105,26 @@ fun ConvoyTopBar(
                     }
                 }
 
-                // Status & Member Count Chips & Theme Switch
+                // Status & Member Count Chips & Theme Switch & Destination Button
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // Set Destination Button
+                    IconButton(
+                        onClick = onOpenDestinationDialog,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .testTag("open_destination_dialog_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AddLocationAlt,
+                            contentDescription = "Set Destination",
+                            tint = CaravanAmber,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // Theme Switcher Button
                     IconButton(
                         onClick = onToggleDarkMode,
@@ -222,8 +238,10 @@ fun ConvoyTopBar(
 fun FleetBottomSheet(
     members: List<TripMember>,
     userLocation: DeviceLocation,
+    sharedRoutes: Map<String, com.example.data.model.SharedRoute> = emptyMap(),
     onDismiss: () -> Unit,
-    onSelectMember: (TripMember) -> Unit
+    onSelectMember: (TripMember) -> Unit,
+    onFollowMemberRoute: (String) -> Unit = {}
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -257,9 +275,15 @@ fun FleetBottomSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(members, key = { it.id }) { member ->
+                    val hasSharedRoute = sharedRoutes[member.id]?.points?.isNotEmpty() == true
                     FleetMemberRow(
                         member = member,
                         userLocation = userLocation,
+                        hasSharedRoute = hasSharedRoute,
+                        onFollowRoute = {
+                            onFollowMemberRoute(member.id)
+                            onDismiss()
+                        },
                         onClick = {
                             onSelectMember(member)
                             onDismiss()
@@ -276,6 +300,8 @@ fun FleetBottomSheet(
 fun FleetMemberRow(
     member: TripMember,
     userLocation: DeviceLocation,
+    hasSharedRoute: Boolean = false,
+    onFollowRoute: () -> Unit = {},
     onClick: () -> Unit
 ) {
     val mColor = try {
@@ -356,6 +382,27 @@ fun FleetMemberRow(
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
+            }
+
+            // Follow Path Action Button if member shared a route
+            if (hasSharedRoute) {
+                FilledTonalButton(
+                    onClick = onFollowRoute,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = mColor.copy(alpha = 0.18f),
+                        contentColor = mColor
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .height(32.dp)
+                        .padding(end = 8.dp)
+                        .testTag("follow_route_button_${member.id}")
+                ) {
+                    Icon(Icons.Default.Navigation, contentDescription = "Follow Path", modifier = Modifier.size(13.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Follow", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
             // Speed & Distance

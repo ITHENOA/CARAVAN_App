@@ -27,6 +27,7 @@ import com.example.ui.screens.trip.TripScreen
 import com.example.ui.theme.CaravanTheme
 import com.example.ui.theme.NightSlateBg
 import com.example.ui.viewmodel.CaravanViewModel
+import org.maplibre.android.MapLibre
 
 object CaravanRoutes {
     const val HOME = "home"
@@ -37,6 +38,11 @@ object CaravanRoutes {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            MapLibre.getInstance(this)
+        } catch (e: Exception) {
+            android.util.Log.e("Caravan", "Failed to initialize MapLibre", e)
+        }
         enableEdgeToEdge()
 
         setContent {

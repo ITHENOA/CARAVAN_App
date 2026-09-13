@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.TripMember
@@ -52,7 +53,7 @@ fun TripScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // 1. Full Screen Interactive Map with Real OpenStreetMap / Carto Raster Tiles
+        // 1. Full Screen Interactive Map with Real OpenFreeMap Liberty Basemap (MapLibre Client)
         ConvoyMapView(
             currentLocation = currentLocation,
             members = tripState.members,
@@ -64,15 +65,16 @@ fun TripScreen(
             isNavigating = tripState.isNavigating,
             activeSpeakerName = tripState.activeSpeakerName,
             selfColorHex = userProfile.avatarColor,
+            selfClientId = userProfile.clientId,
             marks = tripState.marks,
             sharedRoutes = tripState.sharedRoutes,
             onLongPressMark = { lat, lng ->
                 viewModel.setDestination(lat, lng, "Marked Point")
             },
-            onSelectRouteProvider = { provider ->
-                viewModel.calculateRouteWithProvider(provider)
-            },
             onMemberSelected = { /* Focus member */ },
+            onMarkSelected = { mark ->
+                viewModel.navigateToMemberMark(mark)
+            },
             modifier = Modifier.fillMaxSize()
         )
 
@@ -83,7 +85,7 @@ fun TripScreen(
                 .statusBarsPadding()
                 .fillMaxWidth()
         ) {
-            // Convoy Top Bar with Light/Dark Theme Switcher
+            // Convoy Top Bar with Light/Dark Theme Switcher & Destination Setting
             ConvoyTopBar(
                 tripName = tripState.tripName,
                 inviteCode = tripState.inviteCode,
@@ -91,6 +93,7 @@ fun TripScreen(
                 memberCount = tripState.members.size + 1,
                 isDarkMode = isDarkMode,
                 onToggleDarkMode = { viewModel.toggleDarkMode() },
+                onOpenDestinationDialog = { showDestinationDialog = true },
                 onToggleFleetList = { showFleetSheet = true },
                 onOpenSettings = { /* Settings */ },
                 onLeaveTrip = { showLeaveConfirmDialog = true }
@@ -121,108 +124,259 @@ fun TripScreen(
                         .padding(horizontal = 14.dp, vertical = 6.dp)
                         .testTag("destination_hud_card")
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    val isOsrmActive = tripState.routingProvider == RoutingProvider.OSRM
+                    val isNeshanActive = tripState.routingProvider == RoutingProvider.NESHAN
+                    val isCalculating = tripState.isCalculatingRoute
+                    val neshanGreen = Color(0xFF10B981)
+
+                    if (tripState.isNavigating) {
+                        // Driving Mode HUD: Single sleek horizontal bar:
+                        // car icon -> Marked point text and path information under it -> little button for regular nav -> little button for neshan nav -> cross close button "x"
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    if (tripState.isNavigating) Icons.Default.DirectionsCar else Icons.Default.Navigation,
-                                    contentDescription = null,
-                                    tint = if (tripState.isNavigating) Color(0xFF10B981) else CaravanBlue,
-                                    modifier = Modifier.size(24.dp)
+                            // 1. Car Icon
+                            Icon(
+                                Icons.Default.DirectionsCar,
+                                contentDescription = "Driving",
+                                tint = neshanGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+
+                            Spacer(modifier = Modifier.width(10.dp))
+
+                            // 2. Marked point text and path information under it
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = dest.label ?: "Marked Point",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = dest.label ?: "Destination",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1
+                                val speedKmh = ((currentLocation.speed ?: 0.0) * 3.6).toInt()
+                                val statusText = "${ConvoyUtils.formatDistance(distM)} • ETA: $etaStr • ${speedKmh} km/h"
+                                Text(
+                                    text = statusText,
+                                    fontSize = 11.sp,
+                                    color = neshanGreen,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // 3. Little button for regular nav (no text)
+                            Surface(
+                                onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.OSRM) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(1.dp, if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("btn_regular_nav_mini")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (isCalculating && isOsrmActive) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            color = if (isOsrmActive) Color.White else CaravanBlue,
+                                            modifier = Modifier.size(15.dp)
                                         )
-                                        if (tripState.isNavigating) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Surface(
-                                                color = Color(0xFF10B981).copy(alpha = 0.2f),
-                                                shape = RoundedCornerShape(6.dp)
-                                            ) {
-                                                Text(
-                                                    text = "Driving",
-                                                    color = Color(0xFF10B981),
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                    val speedKmh = ((currentLocation.speed ?: 0.0) * 3.6).toInt()
-                                    val statusText = if (tripState.isNavigating) {
-                                        "${ConvoyUtils.formatDistance(distM)} • ETA: $etaStr • ${speedKmh} km/h"
                                     } else {
-                                        "${ConvoyUtils.formatDistance(distM)} • ETA: $etaStr"
+                                        Icon(
+                                            Icons.Default.Navigation,
+                                            contentDescription = "Regular Route",
+                                            tint = if (isOsrmActive) Color.White else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.size(16.dp)
+                                        )
                                     }
-                                    Text(
-                                        text = statusText,
-                                        fontSize = 12.sp,
-                                        color = if (tripState.isNavigating) Color(0xFF10B981) else CaravanBlue,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
                                 }
                             }
 
-                            // Dismiss / Clear Destination
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // 4. Little button for neshan nav (no text)
+                            Surface(
+                                onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.NESHAN) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(1.dp, if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("btn_neshan_nav_mini")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (isCalculating && isNeshanActive) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            color = if (isNeshanActive) Color.White else neshanGreen,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Traffic,
+                                            contentDescription = "Neshan Route",
+                                            tint = if (isNeshanActive) Color.White else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(4.dp))
+
+                            // 5. Cross close button "x"
                             IconButton(
                                 onClick = { viewModel.stopNavigation() },
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
                                     Icons.Default.Close,
-                                    contentDescription = "Clear Route",
+                                    contentDescription = "Close",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Single Action Button: Start Driving / Stop Driving
-                        if (!tripState.isNavigating) {
-                            Button(
-                                onClick = { viewModel.startNavigation() },
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = CaravanBlue,
-                                    contentColor = Color.White
-                                ),
+                    } else {
+                        // Non-driving mode: Shows point info and 1x2 buttons to launch navigation
+                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Default.DirectionsCar, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Start Driving Navigation", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Navigation,
+                                        contentDescription = null,
+                                        tint = CaravanBlue,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = dest.label ?: "Marked Point",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = "${ConvoyUtils.formatDistance(distM)} • ETA: $etaStr",
+                                            fontSize = 12.sp,
+                                            color = CaravanBlue,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+
+                                // Dismiss / Clear Destination
+                                IconButton(
+                                    onClick = { viewModel.stopNavigation() },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Clear Route",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
-                        } else {
-                            OutlinedButton(
-                                onClick = { viewModel.stopNavigation() },
-                                shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, CaravanCrimson.copy(alpha = 0.7f)),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = CaravanCrimson.copy(alpha = 0.1f),
-                                    contentColor = CaravanCrimson
-                                ),
-                                modifier = Modifier.fillMaxWidth()
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // 1x2 Buttons: Regular Navigation (Left) and Neshan Navigation (Right)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Exit Driving Mode", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Button(
+                                    onClick = {
+                                        viewModel.calculateRouteWithProvider(RoutingProvider.OSRM)
+                                        viewModel.startNavigation()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
+                                        contentColor = if (isOsrmActive) Color.White else MaterialTheme.colorScheme.onSurface
+                                    ),
+                                    border = if (isOsrmActive) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("btn_regular_navigation")
+                                ) {
+                                    if (isCalculating && isOsrmActive) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            color = if (isOsrmActive) Color.White else CaravanBlue,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Navigation,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Regular Nav",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        viewModel.calculateRouteWithProvider(RoutingProvider.NESHAN)
+                                        viewModel.startNavigation()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.surfaceVariant,
+                                        contentColor = if (isNeshanActive) Color.White else MaterialTheme.colorScheme.onSurface
+                                    ),
+                                    border = if (isNeshanActive) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("btn_neshan_navigation")
+                                ) {
+                                    if (isCalculating && isNeshanActive) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            color = if (isNeshanActive) Color.White else neshanGreen,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    } else {
+                                        Icon(
+                                            Icons.Default.Traffic,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Neshan Nav",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                }
                             }
                         }
                     }
@@ -318,8 +472,12 @@ fun TripScreen(
             FleetBottomSheet(
                 members = tripState.members,
                 userLocation = currentLocation,
+                sharedRoutes = tripState.sharedRoutes,
                 onDismiss = { showFleetSheet = false },
-                onSelectMember = { /* center */ }
+                onSelectMember = { /* center */ },
+                onFollowMemberRoute = { memberId ->
+                    viewModel.followSharedRoute(memberId)
+                }
             )
         }
 

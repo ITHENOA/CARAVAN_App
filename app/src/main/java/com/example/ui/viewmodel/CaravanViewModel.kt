@@ -105,6 +105,20 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
+        // Hook up PTT audio streaming to broadcast live voice chunks over WebSocket
+        var audioSeq = 0
+        pttController.onAudioChunkCaptured = { pcmBytes ->
+            if (_tripState.value.pttState == PttState.TRANSMITTING) {
+                try {
+                    val b64 = android.util.Base64.encodeToString(pcmBytes, android.util.Base64.NO_WRAP)
+                    val msg = CaravanProtocol.buildAudioChunk(b64, 16000, audioSeq++)
+                    wsClient.send(msg)
+                } catch (e: Exception) {
+                    android.util.Log.e("CaravanVM", "Failed to stream audio chunk", e)
+                }
+            }
+        }
+
         // Combine remote members with mock fleet (if enabled) and ensure strictly distinct colors for everyone in group
         viewModelScope.launch {
             combine(remoteMembers, locationProvider.mockFleet) { remote, mock ->
@@ -151,6 +165,60 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
+        // Monitor route deviation during navigation and automatically update path
+        viewModelScope.launch {
+            var consecutiveDeviationCount = 0
+            var lastRecalcTime = 0L
+
+            currentLocation.collect { loc ->
+                val state = _tripState.value
+                val dest = state.destination
+                val currentRoute = state.route
+                val now = System.currentTimeMillis()
+
+                if (state.isNavigating && dest != null && currentRoute != null && !state.isCalculatingRoute) {
+                    if (now - lastRecalcTime > 5000L && currentRoute.points.size >= 2) {
+                        val distToRoute = ConvoyUtils.minDistanceToPolyline(
+                            lat = loc.latitude,
+                            lng = loc.longitude,
+                            points = currentRoute.points
+                        )
+                        // Off-route threshold: 40 meters
+                        if (distToRoute > 40.0) {
+                            consecutiveDeviationCount++
+                            if (consecutiveDeviationCount >= 2) {
+                                consecutiveDeviationCount = 0
+                                lastRecalcTime = now
+                                android.util.Log.i("Caravan", "Off-route detected (${distToRoute.toInt()}m). Auto-updating route using ${state.routingProvider}...")
+                                calculateRouteWithProvider(state.routingProvider)
+                            }
+                        } else {
+                            consecutiveDeviationCount = 0
+                        }
+                    }
+                }
+            }
+        }
+
+        locationProvider.startLocationUpdates()
+    }
+
+    fun setManualLocation(lat: Double, lng: Double) {
+        locationProvider.setManualLocation(lat, lng)
+        val me = currentLocation.value
+        if (_tripState.value.inTrip) {
+            val msg = CaravanProtocol.buildLocationUpdate(
+                latitude = lat,
+                longitude = lng,
+                speed = me.speed,
+                heading = me.heading,
+                accuracy = me.accuracy
+            )
+            wsClient.send(msg)
+        }
+    }
+
+    fun refreshGps() {
         locationProvider.startLocationUpdates()
     }
 
@@ -299,14 +367,16 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             while (isActive) {
                 delay(2000L)
                 val loc = currentLocation.value
-                val msg = CaravanProtocol.buildLocationUpdate(
-                    latitude = loc.latitude,
-                    longitude = loc.longitude,
-                    accuracy = loc.accuracy,
-                    speed = loc.speed,
-                    heading = loc.heading
-                )
-                wsClient.send(msg)
+                if (loc.isRealGps && (loc.latitude != 0.0 || loc.longitude != 0.0)) {
+                    val msg = CaravanProtocol.buildLocationUpdate(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        accuracy = loc.accuracy,
+                        speed = loc.speed,
+                        heading = loc.heading
+                    )
+                    wsClient.send(msg)
+                }
             }
         }
     }
@@ -360,7 +430,11 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
             is CaravanWsEvent.MessageReceived -> {
-                handleProtocolMessage(event.type, event.raw)
+                try {
+                    handleProtocolMessage(event.type, event.raw)
+                } catch (e: Throwable) {
+                    android.util.Log.e("CaravanVM", "Error handling websocket message: ${event.type}", e)
+                }
             }
         }
     }
@@ -376,8 +450,11 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                     remoteMembers.value = map
                 }
                 if (json.has("destination") && !json.isNull("destination")) {
-                    val dest = CaravanProtocol.parseDestination(json.getJSONObject("destination"))
-                    setDestinationInternal(dest)
+                    val destObj = json.optJSONObject("destination")
+                    if (destObj != null) {
+                        val dest = CaravanProtocol.parseDestination(destObj)
+                        if (dest != null) setDestinationInternal(dest)
+                    }
                 }
                 if (json.has("marks") && !json.isNull("marks")) {
                     val marksArr = json.optJSONArray("marks")
@@ -387,7 +464,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                             val mObj = marksArr.optJSONObject(i)
                             if (mObj != null) {
                                 val m = CaravanProtocol.parseMapMark(mObj)
-                                if (m.clientId.isNotEmpty()) markMap[m.clientId] = m
+                                if (m != null && m.clientId.isNotEmpty()) markMap[m.clientId] = m
                             }
                         }
                         _tripState.update { it.copy(marks = markMap) }
@@ -430,7 +507,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             "map_mark" -> {
                 val mObj = json.optJSONObject("mark") ?: json
                 val mark = CaravanProtocol.parseMapMark(mObj)
-                if (mark.clientId.isNotEmpty()) {
+                if (mark != null && mark.clientId.isNotEmpty()) {
                     _tripState.update { it.copy(marks = it.marks + (mark.clientId to mark)) }
                 }
             }
@@ -490,10 +567,17 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             }
             "destination_update" -> {
                 val dest = CaravanProtocol.parseDestination(json)
-                setDestinationInternal(dest)
+                if (dest != null) {
+                    setDestinationInternal(dest)
+                }
             }
             "chat_message" -> {
                 val cid = json.optString("clientId", "")
+                // Prevent duplicate message: local user already appended their sent message to local chat state
+                if (cid.isNotEmpty() && cid == _userProfile.value.clientId) {
+                    return
+                }
+
                 val senderName = json.optString("senderName", json.optString("displayName", "Caravan Member"))
                 val senderColor = json.optString("senderColor", json.optString("avatarColor", ConvoyUtils.colorForClientId(cid)))
                 val text = json.optString("text", "")
@@ -530,6 +614,22 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                     delay(3200L)
                     _tripState.update { state ->
                         state.copy(visiblePreviews = state.visiblePreviews.filterNot { it.id == preview.id })
+                    }
+                }
+            }
+            "audio_chunk" -> {
+                val cid = json.optString("clientId", "")
+                // Only play audio from other members
+                if (cid.isNotEmpty() && cid != _userProfile.value.clientId) {
+                    val dataB64 = json.optString("data", "")
+                    if (dataB64.isNotEmpty()) {
+                        try {
+                            val bytes = android.util.Base64.decode(dataB64, android.util.Base64.DEFAULT)
+                            val sampleRate = json.optInt("sampleRate", 16000)
+                            pttController.playAudioChunk(bytes, sampleRate)
+                        } catch (e: Exception) {
+                            android.util.Log.e("CaravanVM", "Error decoding audio chunk", e)
+                        }
                     }
                 }
             }
@@ -619,6 +719,10 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
     fun startNavigation() {
         _tripState.update { it.copy(isNavigating = true) }
+    }
+
+    fun exitDrivingMode() {
+        _tripState.update { it.copy(isNavigating = false) }
     }
 
     fun stopNavigation() {
@@ -719,6 +823,47 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun followSharedRoute(clientId: String) {
+        val shared = _tripState.value.sharedRoutes[clientId] ?: return
+        if (shared.points.size < 2) return
+
+        val member = _tripState.value.members.find { it.id == clientId }
+        val memberName = member?.displayName ?: "Convoy Member"
+        val lastPoint = shared.points.last()
+
+        val dest = TripDestination(
+            latitude = lastPoint.latitude,
+            longitude = lastPoint.longitude,
+            label = "$memberName's Path",
+            updatedAt = System.currentTimeMillis(),
+            updatedById = clientId,
+            updatedByName = memberName,
+            colorHex = shared.colorHex
+        )
+
+        val totalDist = ConvoyUtils.calculateRouteDistanceMeters(shared.points)
+        val durationSec = (totalDist / 15.0).coerceAtLeast(60.0)
+
+        val adoptedRoute = RouteResult(
+            points = shared.points,
+            distanceMeters = totalDist,
+            durationSeconds = durationSec
+        )
+
+        _tripState.update {
+            it.copy(
+                destination = dest,
+                route = adoptedRoute,
+                isNavigating = true
+            )
+        }
+    }
+
+    fun navigateToMemberMark(mark: MapMark) {
+        setDestination(mark.latitude, mark.longitude, "${mark.displayName}'s Mark")
+        calculateRouteWithProvider(_tripState.value.routingProvider)
+    }
+
     fun sendChatMessage(text: String) {
         if (text.isBlank()) return
         val trimmed = text.trim()
@@ -804,6 +949,10 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             locationProvider.stopMockFleet()
         }
     }
+
+    fun isGpsEnabled(): Boolean = locationProvider.isGpsEnabled()
+    fun openLocationSettings() = locationProvider.openLocationSettings()
+    fun requestImmediateLocation() = locationProvider.requestImmediateLocation()
 
     override fun onCleared() {
         super.onCleared()

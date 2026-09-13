@@ -2,11 +2,18 @@ package com.example.data.location
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.Surface
+import android.view.WindowManager
 import com.example.data.model.MemberConnectionStatus
 import com.example.data.model.TripMember
 import kotlinx.coroutines.*
@@ -17,17 +24,25 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 data class DeviceLocation(
-    val latitude: Double = 37.7749,
-    val longitude: Double = -122.4194,
-    val speed: Double = 14.5, // m/s (~52 km/h)
-    val heading: Double = 45.0,
-    val accuracy: Double = 5.0,
-    val timestamp: Long = System.currentTimeMillis()
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val speed: Double = 0.0,
+    val heading: Double = 0.0,
+    val accuracy: Double = 0.0,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isRealGps: Boolean = false
 )
 
 class LocationProvider(private val context: Context) {
     private val locationManager =
         context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+
+    private val sensorManager =
+        context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+
+    private val rotationVectorSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+    private val accelerometerSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val magnetometerSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
     private val _currentLocation = MutableStateFlow(DeviceLocation())
     val currentLocation: StateFlow<DeviceLocation> = _currentLocation.asStateFlow()
@@ -37,57 +52,238 @@ class LocationProvider(private val context: Context) {
 
     private var mockJob: Job? = null
     private var isListeningGps = false
+    private var isListeningSensors = false
+
+    // Sensor calculations
+    private val rotationMatrix = FloatArray(9)
+    private val remappedMatrix = FloatArray(9)
+    private val orientationAngles = FloatArray(3)
+    private val accelReading = FloatArray(3)
+    private val magReading = FloatArray(3)
+    private var hasAccel = false
+    private var hasMag = false
+    private var lastHeading = 0.0
+
+    private val sensorEventListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            var rawHeading: Double? = null
+
+            if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                rawHeading = computeHeadingFromMatrix(rotationMatrix)
+            } else if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+                System.arraycopy(event.values, 0, accelReading, 0, 3)
+                hasAccel = true
+                if (hasMag) {
+                    if (SensorManager.getRotationMatrix(rotationMatrix, null, accelReading, magReading)) {
+                        rawHeading = computeHeadingFromMatrix(rotationMatrix)
+                    }
+                }
+            } else if (event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+                System.arraycopy(event.values, 0, magReading, 0, 3)
+                hasMag = true
+                if (hasAccel) {
+                    if (SensorManager.getRotationMatrix(rotationMatrix, null, accelReading, magReading)) {
+                        rawHeading = computeHeadingFromMatrix(rotationMatrix)
+                    }
+                }
+            }
+
+            rawHeading?.let { targetHeading ->
+                // Apply shortest-angular-distance low-pass filter to eliminate magnetometer jitter
+                val diff = (targetHeading - lastHeading + 540.0) % 360.0 - 180.0
+                if (Math.abs(diff) > 1.2) { // 1.2 degree threshold to prevent jitter when holding still
+                    val smoothed = (lastHeading + diff * 0.35 + 360.0) % 360.0
+                    lastHeading = smoothed
+                    _currentLocation.value = _currentLocation.value.copy(
+                        heading = smoothed
+                    )
+                }
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
+    private fun computeHeadingFromMatrix(matrix: FloatArray): Double {
+        val rotation = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                context.display?.rotation ?: Surface.ROTATION_0
+            } else {
+                @Suppress("DEPRECATION")
+                (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+            }
+        } catch (_: Exception) {
+            Surface.ROTATION_0
+        }
+
+        when (rotation) {
+            Surface.ROTATION_90 -> SensorManager.remapCoordinateSystem(matrix, SensorManager.AXIS_Y, SensorManager.AXIS_MINUS_X, remappedMatrix)
+            Surface.ROTATION_180 -> SensorManager.remapCoordinateSystem(matrix, SensorManager.AXIS_MINUS_X, SensorManager.AXIS_MINUS_Y, remappedMatrix)
+            Surface.ROTATION_270 -> SensorManager.remapCoordinateSystem(matrix, SensorManager.AXIS_MINUS_Y, SensorManager.AXIS_X, remappedMatrix)
+            else -> System.arraycopy(matrix, 0, remappedMatrix, 0, 9)
+        }
+
+        SensorManager.getOrientation(remappedMatrix, orientationAngles)
+        val azimuthRadians = orientationAngles[0]
+        return (Math.toDegrees(azimuthRadians.toDouble()) + 360.0) % 360.0
+    }
 
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            val hasGpsBearing = location.hasBearing() && location.hasSpeed() && location.speed > 3.0f
+            val heading = if (hasGpsBearing) {
+                lastHeading = location.bearing.toDouble()
+                location.bearing.toDouble()
+            } else {
+                _currentLocation.value.heading
+            }
+
             _currentLocation.value = DeviceLocation(
                 latitude = location.latitude,
                 longitude = location.longitude,
-                speed = if (location.hasSpeed()) location.speed.toDouble() else 12.0,
-                heading = if (location.hasBearing()) location.bearing.toDouble() else 45.0,
+                speed = if (location.hasSpeed()) location.speed.toDouble() else 0.0,
+                heading = heading,
                 accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else 5.0,
-                timestamp = location.time
+                timestamp = location.time,
+                isRealGps = true
             )
         }
 
         @Deprecated("Deprecated in Java")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderEnabled(provider: String) {
+            startLocationUpdates()
+        }
         override fun onProviderDisabled(provider: String) {}
+    }
+
+    fun setManualLocation(latitude: Double, longitude: Double, heading: Double = 0.0) {
+        _currentLocation.value = _currentLocation.value.copy(
+            latitude = latitude,
+            longitude = longitude,
+            heading = heading,
+            timestamp = System.currentTimeMillis(),
+            isRealGps = false
+        )
     }
 
     @SuppressLint("MissingPermission")
     fun startLocationUpdates() {
-        if (locationManager == null || isListeningGps) return
+        startSensorUpdates()
+        if (locationManager == null) return
         try {
-            val hasGps = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-            val hasNetwork = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            // 1. Immediately fetch last known location from all available providers
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            var bestLocation: Location? = null
+            for (p in providers) {
+                try {
+                    val loc = locationManager.getLastKnownLocation(p)
+                    if (loc != null) {
+                        if (bestLocation == null || loc.time > bestLocation.time) {
+                            bestLocation = loc
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
 
-            if (hasGps) {
-                locationManager.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER,
-                    2000L,
-                    3f,
-                    locationListener
+            bestLocation?.let { loc ->
+                _currentLocation.value = DeviceLocation(
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    speed = if (loc.hasSpeed()) loc.speed.toDouble() else 0.0,
+                    heading = if (loc.hasBearing()) loc.bearing.toDouble() else _currentLocation.value.heading,
+                    accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 5.0,
+                    timestamp = loc.time,
+                    isRealGps = true
                 )
-                isListeningGps = true
-            } else if (hasNetwork) {
-                locationManager.requestLocationUpdates(
-                    LocationManager.NETWORK_PROVIDER,
-                    2000L,
-                    3f,
-                    locationListener
-                )
+            }
+
+            // 2. Request live updates from both GPS and Network providers simultaneously
+            if (!isListeningGps) {
+                if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    try {
+                        locationManager.requestLocationUpdates(
+                            LocationManager.GPS_PROVIDER,
+                            1000L,
+                            1f,
+                            locationListener
+                        )
+                    } catch (e: Exception) {
+                        Log.w("LocationProvider", "GPS update request failed", e)
+                    }
+                }
+                if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    try {
+                        locationManager.requestLocationUpdates(
+                            LocationManager.NETWORK_PROVIDER,
+                            1000L,
+                            1f,
+                            locationListener
+                        )
+                    } catch (e: Exception) {
+                        Log.w("LocationProvider", "Network update request failed", e)
+                    }
+                }
                 isListeningGps = true
             }
         } catch (e: SecurityException) {
-            Log.w("LocationProvider", "Location permission not granted, using simulated driving", e)
+            Log.w("LocationProvider", "Location permission not granted", e)
         } catch (e: Exception) {
             Log.w("LocationProvider", "Failed to start GPS", e)
         }
     }
 
+    private fun startSensorUpdates() {
+        if (isListeningSensors || sensorManager == null) return
+        try {
+            if (rotationVectorSensor != null) {
+                sensorManager.registerListener(
+                    sensorEventListener,
+                    rotationVectorSensor,
+                    SensorManager.SENSOR_DELAY_UI
+                )
+                isListeningSensors = true
+            } else {
+                var registered = false
+                if (accelerometerSensor != null) {
+                    sensorManager.registerListener(
+                        sensorEventListener,
+                        accelerometerSensor,
+                        SensorManager.SENSOR_DELAY_UI
+                    )
+                    registered = true
+                }
+                if (magnetometerSensor != null) {
+                    sensorManager.registerListener(
+                        sensorEventListener,
+                        magnetometerSensor,
+                        SensorManager.SENSOR_DELAY_UI
+                    )
+                    registered = true
+                }
+                isListeningSensors = registered
+            }
+        } catch (e: Exception) {
+            Log.w("LocationProvider", "Failed to start orientation sensors", e)
+        }
+    }
+
+    private fun stopSensorUpdates() {
+        if (isListeningSensors && sensorManager != null) {
+            try {
+                sensorManager.unregisterListener(sensorEventListener)
+            } catch (_: Exception) {}
+            isListeningSensors = false
+        }
+    }
+
     fun stopLocationUpdates() {
+        stopSensorUpdates()
         if (isListeningGps && locationManager != null) {
             try {
                 locationManager.removeUpdates(locationListener)
@@ -97,6 +293,27 @@ class LocationProvider(private val context: Context) {
         stopMockFleet()
     }
 
+    fun isGpsEnabled(): Boolean {
+        val lm = locationManager ?: return false
+        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    fun openLocationSettings() {
+        try {
+            val intent = android.content.Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("LocationProvider", "Failed to open location settings", e)
+        }
+    }
+
+    fun requestImmediateLocation() {
+        startLocationUpdates()
+    }
+
     fun startMockFleet(scope: CoroutineScope) {
         stopMockFleet()
         mockJob = scope.launch {
@@ -104,23 +321,7 @@ class LocationProvider(private val context: Context) {
             while (isActive) {
                 step++
                 val myLoc = _currentLocation.value
-
-                // If GPS is stationary, gently simulate gentle driving progress for the user as well
                 val rad = Math.toRadians(myLoc.heading)
-                val advanceDist = 0.00018 // approx ~20 meters per 2 sec (~36 km/h)
-                val nextUserLat = myLoc.latitude + advanceDist * cos(rad)
-                val nextUserLng = myLoc.longitude + advanceDist * sin(rad)
-
-                // Only move user if GPS isn't actively providing real movement
-                if (!isListeningGps) {
-                    _currentLocation.value = myLoc.copy(
-                        latitude = nextUserLat,
-                        longitude = nextUserLng,
-                        speed = 13.8 + sin(step * 0.2) * 2.0,
-                        heading = (myLoc.heading + sin(step * 0.1) * 2.0 + 360.0) % 360.0,
-                        timestamp = System.currentTimeMillis()
-                    )
-                }
 
                 val baseLat = _currentLocation.value.latitude
                 val baseLng = _currentLocation.value.longitude

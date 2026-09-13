@@ -82,6 +82,7 @@ export type ClientMessageType =
   | "webrtc_answer"
   | "ice_candidate"
   | "chat_message"
+  | "audio_chunk"
   | "ping";
 
 export type ServerMessageType =
@@ -105,6 +106,7 @@ export type ServerMessageType =
   | "webrtc_answer"
   | "ice_candidate"
   | "chat_message"
+  | "audio_chunk"
   | "pong"
   | "error";
 
@@ -204,6 +206,14 @@ export interface ChatMessage extends BaseMessage {
   senderColor?: string;
 }
 
+export interface AudioChunkMessage extends BaseMessage {
+  type: "audio_chunk";
+  data: string;
+  sampleRate?: number;
+  seq?: number;
+  clientId?: string;
+}
+
 export type ClientMessage =
   | JoinMessage
   | LeaveMessage
@@ -218,6 +228,7 @@ export type ClientMessage =
   | WebrtcSignalMessage
   | IceCandidateMessage
   | ChatMessage
+  | AudioChunkMessage
   | PingMessage;
 
 export interface ErrorMessage extends BaseMessage {

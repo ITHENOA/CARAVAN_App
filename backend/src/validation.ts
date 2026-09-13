@@ -309,6 +309,19 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
         text,
       };
     }
+    case "audio_chunk": {
+      const data = requireString(obj, "data");
+      const sampleRate = typeof obj.sampleRate === "number" ? obj.sampleRate : 16000;
+      const seq = typeof obj.seq === "number" ? obj.seq : 0;
+      return {
+        type: "audio_chunk",
+        version: PROTOCOL_VERSION,
+        timestamp,
+        data,
+        sampleRate,
+        seq,
+      };
+    }
     default:
       throw new ProtocolError("INVALID_MESSAGE", `Unknown message type: ${type}`);
   }

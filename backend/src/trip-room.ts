@@ -22,7 +22,7 @@ import {
 import { parseClientMessage, ProtocolError } from "./validation";
 
 const RATE_LIMIT_WINDOW_MS = 10_000;
-const RATE_LIMIT_MAX = 80;
+const RATE_LIMIT_MAX = 200;
 const LOCATION_MIN_INTERVAL_MS = 400;
 
 interface MemberRuntime {
@@ -260,6 +260,9 @@ export class TripRoom extends DurableObject {
           break;
         case "chat_message":
           this.handleChatMessage(ws, msg);
+          break;
+        case "audio_chunk":
+          this.handleAudioChunk(ws, msg);
           break;
         case "ping":
           this.send(ws, { type: "pong", version: PROTOCOL_VERSION, timestamp: nowMs() });
@@ -850,6 +853,29 @@ export class TripRoom extends DurableObject {
       senderColor: att.avatarColor ?? "#1976D2",
       text: msg.text,
     });
+  }
+
+  private handleAudioChunk(
+    ws: WebSocket,
+    msg: Extract<ReturnType<typeof parseClientMessage>, { type: "audio_chunk" }>,
+  ): void {
+    const att = this.getAttachment(ws);
+    if (!att.joined || !att.clientId) return;
+    if (this.activeSpeakerId && this.activeSpeakerId !== att.clientId) {
+      return;
+    }
+    this.broadcast(
+      {
+        type: "audio_chunk",
+        version: PROTOCOL_VERSION,
+        timestamp: nowMs(),
+        clientId: att.clientId,
+        data: msg.data,
+        sampleRate: msg.sampleRate,
+        seq: msg.seq,
+      },
+      ws,
+    );
   }
 
   private forwardSignal(

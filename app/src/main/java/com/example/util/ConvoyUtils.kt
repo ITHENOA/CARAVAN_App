@@ -98,6 +98,15 @@ object ConvoyUtils {
         return r * c
     }
 
+    fun calculateRouteDistanceMeters(points: List<com.example.data.model.LatLngPoint>): Double {
+        if (points.size < 2) return 0.0
+        var total = 0.0
+        for (i in 0 until points.size - 1) {
+            total += distanceMeters(points[i].latitude, points[i].longitude, points[i + 1].latitude, points[i + 1].longitude)
+        }
+        return total
+    }
+
     fun formatDistance(meters: Double, useMetric: Boolean = true): String {
         if (meters.isNaN() || meters < 0) return "--"
         return if (useMetric) {
@@ -155,5 +164,67 @@ object ConvoyUtils {
         val x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(lambdaDiff)
         val theta = atan2(y, x)
         return (Math.toDegrees(theta) + 360.0) % 360.0
+    }
+
+    /**
+     * Formats relative time string for member location updates (e.g. "2m ago", "15m ago", "1h ago").
+     * Returns null if fresh (< 45 seconds).
+     */
+    fun formatTimeAgo(timestamp: Long?): String? {
+        if (timestamp == null || timestamp <= 0L) return null
+        val diffMs = System.currentTimeMillis() - timestamp
+        if (diffMs < 45_000L) return null // Recent (< 45 sec), no stale text needed
+        val minutes = (diffMs / 60_000L).toInt()
+        return when {
+            minutes < 1 -> "just now"
+            minutes < 60 -> "${minutes}m ago"
+            minutes < 1440 -> "${minutes / 60}h ago"
+            else -> "${minutes / 1440}d ago"
+        }
+    }
+
+    /**
+     * Calculates minimum distance in meters from a coordinate (lat, lng)
+     * to a polyline consisting of LatLngPoint coordinates.
+     */
+    fun minDistanceToPolyline(lat: Double, lng: Double, points: List<com.example.data.model.LatLngPoint>): Double {
+        if (points.isEmpty()) return Double.MAX_VALUE
+        if (points.size == 1) return distanceMeters(lat, lng, points[0].latitude, points[0].longitude)
+
+        var minDistance = Double.MAX_VALUE
+        val latRad = Math.toRadians(lat)
+        val cosLat = cos(latRad)
+        val metersPerDegLat = 111132.95
+        val metersPerDegLng = 111412.84 * cosLat
+
+        for (i in 0 until points.size - 1) {
+            val p1 = points[i]
+            val p2 = points[i + 1]
+
+            // Convert to local meter coordinates relative to (lat, lng)
+            val x1 = (p1.longitude - lng) * metersPerDegLng
+            val y1 = (p1.latitude - lat) * metersPerDegLat
+            val x2 = (p2.longitude - lng) * metersPerDegLng
+            val y2 = (p2.latitude - lat) * metersPerDegLat
+
+            val dx = x2 - x1
+            val dy = y2 - y1
+            val lenSq = dx * dx + dy * dy
+
+            val dist = if (lenSq == 0.0) {
+                sqrt(x1 * x1 + y1 * y1)
+            } else {
+                // Project (0,0) onto segment [p1, p2]
+                val t = (-(x1 * dx + y1 * dy) / lenSq).coerceIn(0.0, 1.0)
+                val projX = x1 + t * dx
+                val projY = y1 + t * dy
+                sqrt(projX * projX + projY * projY)
+            }
+
+            if (dist < minDistance) {
+                minDistance = dist
+            }
+        }
+        return minDistance
     }
 }
