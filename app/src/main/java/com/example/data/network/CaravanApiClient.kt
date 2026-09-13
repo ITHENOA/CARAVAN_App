@@ -1,0 +1,266 @@
+package com.example.data.network
+
+import com.example.data.model.LatLngPoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+data class CreateTripResult(
+    val tripId: String,
+    val inviteCode: String,
+    val leaderToken: String,
+    val leaderId: String,
+    val name: String,
+    val joinUrl: String,
+    val qrPayload: String
+)
+
+data class RouteResult(
+    val points: List<LatLngPoint>,
+    val distanceMeters: Double,
+    val durationSeconds: Double
+)
+
+class CaravanApiClient(
+    private var baseUrl: String = "https://caravan-backend.ithenoa.workers.dev"
+) {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    fun updateBaseUrl(newBaseUrl: String) {
+        baseUrl = newBaseUrl.trimEnd('/')
+    }
+
+    suspend fun createTrip(
+        name: String,
+        displayName: String,
+        clientId: String
+    ): Result<CreateTripResult> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("name", name)
+                put("displayName", displayName)
+                put("clientId", clientId)
+            }
+            val request = Request.Builder()
+                .url("$baseUrl/api/trips")
+                .post(json.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val bodyStr = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    Exception("Failed to create trip on server: ${response.code} $bodyStr")
+                )
+            }
+
+            val resObj = JSONObject(bodyStr)
+            Result.success(
+                CreateTripResult(
+                    tripId = resObj.getString("tripId"),
+                    inviteCode = resObj.getString("inviteCode"),
+                    leaderToken = resObj.optString("leaderToken", "leader-secret"),
+                    leaderId = resObj.optString("leaderId", clientId),
+                    name = resObj.optString("name", name),
+                    joinUrl = resObj.optString("joinUrl", ""),
+                    qrPayload = resObj.optString("qrPayload", "")
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun lookupTrip(inviteCode: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("inviteCode", inviteCode.trim())
+            }
+            val request = Request.Builder()
+                .url("$baseUrl/api/trips/lookup")
+                .post(json.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val bodyStr = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    Exception("Invite code not found on server: ${response.code}")
+                )
+            }
+
+            val resObj = JSONObject(bodyStr)
+            val tripId = resObj.optString("tripId", "")
+            if (tripId.isNotEmpty()) {
+                Result.success(tripId)
+            } else {
+                Result.failure(Exception("Trip ID not returned from server"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun calculateNeshanRoute(
+        startLat: Double,
+        startLng: Double,
+        endLat: Double,
+        endLng: Double,
+        apiKey: String
+    ): RouteResult = withContext(Dispatchers.IO) {
+        val trimmedKey = apiKey.trim()
+        if (trimmedKey.isNotEmpty()) {
+            try {
+                val url = "https://api.neshan.org/v4/direction?type=car&origin=$startLat,$startLng&destination=$endLat,$endLng"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("Api-Key", trimmedKey)
+                    .get()
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val body = response.body?.string()
+                if (response.isSuccessful && !body.isNullOrBlank()) {
+                    val json = JSONObject(body)
+                    val routes = json.optJSONArray("routes")
+                    if (routes != null && routes.length() > 0) {
+                        val route = routes.getJSONObject(0)
+                        val legs = route.optJSONArray("legs")
+                        var totalDist = 0.0
+                        var totalDur = 0.0
+                        val allPoints = mutableListOf<LatLngPoint>()
+
+                        if (legs != null && legs.length() > 0) {
+                            for (l in 0 until legs.length()) {
+                                val leg = legs.getJSONObject(l)
+                                val dObj = leg.optJSONObject("distance")
+                                if (dObj != null) totalDist += dObj.optDouble("value", 0.0)
+                                val durObj = leg.optJSONObject("duration")
+                                if (durObj != null) totalDur += durObj.optDouble("value", 0.0)
+
+                                val steps = leg.optJSONArray("steps")
+                                if (steps != null) {
+                                    for (s in 0 until steps.length()) {
+                                        val step = steps.getJSONObject(s)
+                                        val poly = step.optString("polyline", "")
+                                        if (poly.isNotEmpty()) {
+                                            val decoded = decodePolyline(poly)
+                                            allPoints.addAll(decoded)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (allPoints.isNotEmpty()) {
+                            return@withContext RouteResult(allPoints, totalDist, totalDur)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Fallback to standard routing
+            }
+        }
+        // Fallback to standard OSRM routing
+        calculateRoute(startLat, startLng, endLat, endLng)
+    }
+
+    private fun decodePolyline(encoded: String): List<LatLngPoint> {
+        val poly = ArrayList<LatLngPoint>()
+        var index = 0
+        val len = encoded.length
+        var lat = 0
+        var lng = 0
+
+        while (index < len) {
+            var b: Int
+            var shift = 0
+            var result = 0
+            do {
+                b = encoded[index++].code - 63
+                result = result or (b and 0x1f shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+            lat += dlat
+
+            shift = 0
+            result = 0
+            do {
+                b = encoded[index++].code - 63
+                result = result or (b and 0x1f shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+            lng += dlng
+
+            poly.add(LatLngPoint(latitude = lat.toDouble() / 1E5, longitude = lng.toDouble() / 1E5))
+        }
+        return poly
+    }
+
+    suspend fun calculateRoute(
+        startLat: Double,
+        startLng: Double,
+        endLat: Double,
+        endLng: Double
+    ): RouteResult = withContext(Dispatchers.IO) {
+        try {
+            val url = "https://router.project-osrm.org/route/v1/driving/$startLng,$startLat;$endLng,$endLat?overview=full&geometries=geojson"
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val body = response.body?.string()
+            if (response.isSuccessful && !body.isNullOrBlank()) {
+                val json = JSONObject(body)
+                val routes = json.optJSONArray("routes")
+                if (routes != null && routes.length() > 0) {
+                    val first = routes.getJSONObject(0)
+                    val distance = first.optDouble("distance", 0.0)
+                    val duration = first.optDouble("duration", 0.0)
+                    val geometry = first.getJSONObject("geometry")
+                    val coords = geometry.getJSONArray("coordinates")
+                    val points = mutableListOf<LatLngPoint>()
+                    for (i in 0 until coords.length()) {
+                        val c = coords.getJSONArray(i)
+                        points.add(LatLngPoint(latitude = c.getDouble(1), longitude = c.getDouble(0)))
+                    }
+                    if (points.isNotEmpty()) {
+                        return@withContext RouteResult(points, distance, duration)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Fallback interpolation
+        }
+
+        // Direct interpolation fallback with intermediate curved waypoints
+        val distM = com.example.util.ConvoyUtils.distanceMeters(startLat, startLng, endLat, endLng)
+        val estSecs = if (distM > 0) (distM / 15.0) else 0.0 // assume ~54 km/h average
+        val steps = 20
+        val points = mutableListOf<LatLngPoint>()
+        for (i in 0..steps) {
+            val t = i / steps.toDouble()
+            // add gentle curve
+            val lat = startLat + (endLat - startLat) * t + Math.sin(t * Math.PI) * 0.002
+            val lng = startLng + (endLng - startLng) * t + Math.sin(t * Math.PI) * 0.003
+            points.add(LatLngPoint(lat, lng))
+        }
+        RouteResult(points, distM, estSecs)
+    }
+}

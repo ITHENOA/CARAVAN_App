@@ -1,0 +1,6 @@
+{
+  "name": "Caravan",
+  "description": "Multi-vehicle convoy coordination with live fleet locations, routing, quick driving prompts, and push-to-talk voice",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

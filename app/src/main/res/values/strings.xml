@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Caravan</string>
+    <string name="app_tagline">Multi-vehicle convoy coordination</string>
+    <string name="action_create_convoy">Create Convoy Trip</string>
+    <string name="action_join_convoy">Join Convoy with Code</string>
+    <string name="action_rejoin_convoy">Rejoin Convoy</string>
+    <string name="ptt_push_to_talk">PUSH TO TALK</string>
+    <string name="ptt_transmitting">TRANSMITTING</string>
+    <string name="error_location_permission">Location permission required for convoy telemetry</string>
+</resources>
