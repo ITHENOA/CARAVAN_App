@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,8 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -35,6 +38,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.data.location.DeviceLocation
 import com.example.data.model.MapMark
+import com.example.data.model.MemberConnectionStatus
+import com.example.data.model.RouteSegment
 import com.example.data.model.SharedRoute
 import com.example.data.model.TripDestination
 import com.example.data.model.TripMember
@@ -42,6 +47,7 @@ import com.example.data.network.RouteResult
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.RoutingProvider
 import com.example.util.ConvoyUtils
+import kotlinx.coroutines.delay
 import org.maplibre.android.annotations.Icon
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
@@ -64,11 +70,11 @@ fun ConvoyMapView(
     members: List<TripMember>,
     destination: TripDestination?,
     route: RouteResult?,
-    activeRoutingProvider: RoutingProvider,
+    activeRoutingProvider: RoutingProvider?,
     isCalculatingRoute: Boolean,
     isDarkMode: Boolean,
     isNavigating: Boolean = false,
-    activeSpeakerName: String?,
+    isMyLocationActive: Boolean = false,
     selfColorHex: String = "#0EA5E9",
     selfClientId: String = "",
     selfDisplayName: String = "",
@@ -77,6 +83,8 @@ fun ConvoyMapView(
     onLongPressMark: (latitude: Double, longitude: Double) -> Unit,
     onMemberSelected: (TripMember) -> Unit,
     onMarkSelected: ((MapMark) -> Unit)? = null,
+    /** @return true if my-location was activated / refreshed; false if system location is off. */
+    onMyLocationClick: () -> Boolean = { true },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -87,15 +95,19 @@ fun ConvoyMapView(
     var initialCameraSet by remember { mutableStateOf(false) }
 
     // Retained map annotation references to eliminate flickering, GPU stalls, and render lag
-    var activeRoutePolyline by remember { mutableStateOf<org.maplibre.android.annotations.Polyline?>(null) }
+    var activeRoutePolylines by remember { mutableStateOf<List<org.maplibre.android.annotations.Polyline>>(emptyList()) }
     var activeSharedPolylines by remember { mutableStateOf<List<org.maplibre.android.annotations.Polyline>>(emptyList()) }
-    var activeMarkMarkers by remember { mutableStateOf<List<org.maplibre.android.annotations.Marker>>(emptyList()) }
     var activeMemberMarkers by remember { mutableStateOf<List<org.maplibre.android.annotations.Marker>>(emptyList()) }
 
     var destScreenPoint by remember { mutableStateOf<PointF?>(null) }
     var selfScreenPoint by remember { mutableStateOf<PointF?>(null) }
+    var markScreenPoints by remember { mutableStateOf<Map<String, PointF>>(emptyMap()) }
     var currentMapBearing by remember { mutableDoubleStateOf(0.0) }
+    var recenterRequestedAt by remember { mutableLongStateOf(0L) }
     val currentDestination by rememberUpdatedState(destination)
+    val currentMarks by rememberUpdatedState(marks)
+    val currentLocationState by rememberUpdatedState(currentLocation)
+    val isMyLocationActiveState by rememberUpdatedState(isMyLocationActive)
 
     fun updateScreenLocations(map: MapLibreMap?) {
         val m = map ?: mapLibreMap ?: return
@@ -107,11 +119,17 @@ fun ConvoyMapView(
             } else {
                 destScreenPoint = null
             }
-            if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
-                selfScreenPoint = m.projection.toScreenLocation(LatLng(currentLocation.latitude, currentLocation.longitude))
+            val loc = currentLocationState
+            if (isMyLocationActiveState && (loc.latitude != 0.0 || loc.longitude != 0.0)) {
+                selfScreenPoint = m.projection.toScreenLocation(LatLng(loc.latitude, loc.longitude))
             } else {
                 selfScreenPoint = null
             }
+            val nextMarks = LinkedHashMap<String, PointF>(currentMarks.size)
+            currentMarks.forEach { (id, mark) ->
+                nextMarks[id] = m.projection.toScreenLocation(LatLng(mark.latitude, mark.longitude))
+            }
+            markScreenPoints = nextMarks
         } catch (_: Exception) {}
     }
 
@@ -178,21 +196,18 @@ fun ConvoyMapView(
                     onMemberSelected(found)
                     return@setOnMarkerClickListener true
                 }
-                val foundMark = marks.values.firstOrNull { it.displayName == marker.title }
-                if (foundMark != null) {
-                    onMarkSelected?.invoke(foundMark)
-                    return@setOnMarkerClickListener true
-                }
                 true
             }
         }
     }
 
-    // Keep screen projection in sync whenever destination, location, or map state changes
+    // Keep screen projection in sync whenever destination, marks, location, or map state changes
     LaunchedEffect(
         isMapReady,
         destination?.latitude,
         destination?.longitude,
+        marks,
+        isMyLocationActive,
         currentLocation.latitude,
         currentLocation.longitude,
         currentLocation.heading,
@@ -206,16 +221,53 @@ fun ConvoyMapView(
 
     var wasNavigating by remember { mutableStateOf(false) }
 
-    // Initial camera placement on user location
-    LaunchedEffect(isMapReady, currentLocation.latitude, currentLocation.longitude) {
+    // Camera to user only after GPS button is turned on (not on launch)
+    LaunchedEffect(isMapReady, isMyLocationActive, currentLocation.latitude, currentLocation.longitude) {
         val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isMapReady) return@LaunchedEffect
+        if (!isMapReady || !isMyLocationActive) return@LaunchedEffect
         if (!initialCameraSet && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
             initialCameraSet = true
             map.cameraPosition = CameraPosition.Builder()
                 .target(LatLng(currentLocation.latitude, currentLocation.longitude))
                 .zoom(14.5)
                 .build()
+        }
+    }
+
+    // GPS button: prefer a fix from after the tap; fall back after a short wait
+    val locationForRecenter by rememberUpdatedState(currentLocation)
+    val navigatingForRecenter by rememberUpdatedState(isNavigating)
+    LaunchedEffect(recenterRequestedAt, isMapReady, isMyLocationActive) {
+        if (recenterRequestedAt == 0L || !isMapReady || !isMyLocationActive) return@LaunchedEffect
+        val map = mapLibreMap ?: return@LaunchedEffect
+        val softDeadline = recenterRequestedAt + 2500L
+        val hardDeadline = recenterRequestedAt + 5000L
+        while (true) {
+            val loc = locationForRecenter
+            val hasLoc = loc.latitude != 0.0 || loc.longitude != 0.0
+            val fresh = loc.timestamp >= recenterRequestedAt - 500L
+            val now = System.currentTimeMillis()
+            if (hasLoc && (fresh || loc.isRealGps || now >= softDeadline)) {
+                map.animateCamera(
+                    CameraUpdateFactory.newCameraPosition(
+                        CameraPosition.Builder()
+                            .target(LatLng(loc.latitude, loc.longitude))
+                            .zoom(if (navigatingForRecenter) 16.5 else 15.0)
+                            .tilt(if (navigatingForRecenter) 50.0 else 0.0)
+                            .bearing(if (navigatingForRecenter) loc.heading else 0.0)
+                            .build()
+                    ),
+                    800
+                )
+                initialCameraSet = true
+                recenterRequestedAt = 0L
+                return@LaunchedEffect
+            }
+            if (now >= hardDeadline) {
+                recenterRequestedAt = 0L
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(300)
         }
     }
 
@@ -260,44 +312,101 @@ fun ConvoyMapView(
         }
     }
 
-    // 1. Synchronize Active Route polyline (ONLY when route, routing provider, or theme changes)
-    LaunchedEffect(isMapReady, route, activeRoutingProvider, selfColorHex) {
+    // Progress watermarks so the consumed route never reappears if GPS jitters backward
+    var routeTrimVertex by remember { mutableIntStateOf(0) }
+    var routeTrimSeg by remember { mutableIntStateOf(0) }
+    var routeTrimSegVertex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(route) {
+        routeTrimVertex = 0
+        routeTrimSeg = 0
+        routeTrimSegVertex = 0
+    }
+
+    // 1. Active route: OSRM = self color; Neshan = per-segment traffic colors.
+    // While navigating, drop the polyline already behind the user (local trim, no re-route).
+    LaunchedEffect(
+        isMapReady,
+        route,
+        selfColorHex,
+        isNavigating,
+        currentLocation.latitude,
+        currentLocation.longitude
+    ) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isMapReady) return@LaunchedEffect
 
         try {
-            activeRoutePolyline?.let {
+            activeRoutePolylines.forEach {
                 try { map.removePolyline(it) } catch (_: Exception) {}
             }
-            activeRoutePolyline = null
+            val newLines = mutableListOf<org.maplibre.android.annotations.Polyline>()
 
-            route?.points?.let { pts ->
-                if (pts.size >= 2) {
-                    val latLngs = pts.map { LatLng(it.latitude, it.longitude) }
-                    val routeColorInt = if (activeRoutingProvider == RoutingProvider.NESHAN) {
-                        android.graphics.Color.parseColor("#10B981") // Neshan traffic green
-                    } else {
-                        try {
-                            android.graphics.Color.parseColor(selfColorHex)
-                        } catch (_: Exception) {
-                            android.graphics.Color.parseColor("#0EA5E9")
-                        }
+            val r = route
+            val stretches = if (r == null) {
+                emptyList()
+            } else if (isNavigating && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
+                val lat = currentLocation.latitude
+                val lng = currentLocation.longitude
+                when {
+                    r.segments.isNotEmpty() -> {
+                        val (trimmed, segIdx, vtxIdx) = ConvoyUtils.remainingSegments(
+                            segments = r.segments,
+                            lat = lat,
+                            lng = lng,
+                            minSegIndex = routeTrimSeg,
+                            minVertexIndex = routeTrimSegVertex
+                        )
+                        routeTrimSeg = segIdx
+                        routeTrimSegVertex = vtxIdx
+                        trimmed
                     }
-                    activeRoutePolyline = map.addPolyline(
-                        PolylineOptions()
-                            .addAll(latLngs)
-                            .color(routeColorInt)
-                            .width(6f)
+                    r.points.size >= 2 -> {
+                        val (trimmed, vtxIdx) = ConvoyUtils.remainingPolyline(
+                            points = r.points,
+                            lat = lat,
+                            lng = lng,
+                            minVertexIndex = routeTrimVertex
+                        )
+                        routeTrimVertex = vtxIdx
+                        listOf(RouteSegment(points = trimmed, colorHex = selfColorHex))
+                    }
+                    else -> emptyList()
+                }
+            } else {
+                when {
+                    r.segments.isNotEmpty() -> r.segments
+                    r.points.size >= 2 -> listOf(
+                        RouteSegment(points = r.points, colorHex = selfColorHex)
                     )
+                    else -> emptyList()
                 }
             }
+
+            stretches.forEach { stretch ->
+                if (stretch.points.size < 2) return@forEach
+                val latLngs = stretch.points.map { LatLng(it.latitude, it.longitude) }
+                val colorInt = try {
+                    android.graphics.Color.parseColor(stretch.colorHex)
+                } catch (_: Exception) {
+                    android.graphics.Color.parseColor("#0EA5E9")
+                }
+                newLines.add(
+                    map.addPolyline(
+                        PolylineOptions()
+                            .addAll(latLngs)
+                            .color(colorInt)
+                            .width(6f)
+                    )
+                )
+            }
+            activeRoutePolylines = newLines
         } catch (e: Exception) {
             android.util.Log.e("ConvoyMapView", "Failed to update active route polyline", e)
         }
     }
 
-    // 2. Synchronize Shared Routes from convoy members
-    LaunchedEffect(isMapReady, sharedRoutes) {
+    // 2. Shared routes: traffic segments if present, else owner's unique color
+    LaunchedEffect(isMapReady, sharedRoutes, members, selfClientId, selfColorHex) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isMapReady) return@LaunchedEffect
 
@@ -306,11 +415,22 @@ fun ConvoyMapView(
                 try { map.removePolyline(it) } catch (_: Exception) {}
             }
             val newPolylines = mutableListOf<org.maplibre.android.annotations.Polyline>()
+            val colorById = members.associate { it.id to (it.avatarColor ?: "#0EA5E9") }
             sharedRoutes.values.forEach { sr ->
-                if (sr.clientId != selfClientId && sr.points.size >= 2) {
-                    val latLngs = sr.points.map { LatLng(it.latitude, it.longitude) }
+                if (sr.clientId == selfClientId) return@forEach
+                val ownerHex = colorById[sr.clientId] ?: sr.colorHex
+                val stretches = when {
+                    sr.segments.isNotEmpty() -> sr.segments
+                    sr.points.size >= 2 -> listOf(
+                        RouteSegment(points = sr.points, colorHex = ownerHex)
+                    )
+                    else -> emptyList()
+                }
+                stretches.forEach { stretch ->
+                    if (stretch.points.size < 2) return@forEach
+                    val latLngs = stretch.points.map { LatLng(it.latitude, it.longitude) }
                     val c = try {
-                        android.graphics.Color.parseColor(sr.colorHex)
+                        android.graphics.Color.parseColor(stretch.colorHex)
                     } catch (_: Exception) {
                         android.graphics.Color.parseColor("#F59E0B")
                     }
@@ -330,39 +450,17 @@ fun ConvoyMapView(
         }
     }
 
-    // 3. Synchronize Map Marks (skip dest duplicate — radiating overlay owns that spot)
-    LaunchedEffect(isMapReady, marks, destination?.latitude, destination?.longitude) {
-        val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isMapReady) return@LaunchedEffect
+    // 3. Map marks are Compose RadiatingTargetMarker overlays (same size/pulse as destination)
 
-        try {
-            activeMarkMarkers.forEach {
-                try { map.removeMarker(it) } catch (_: Exception) {}
-            }
-            val newMarkers = mutableListOf<org.maplibre.android.annotations.Marker>()
-            val dest = destination
-            marks.values.forEach { mark ->
-                if (dest != null &&
-                    kotlin.math.abs(mark.latitude - dest.latitude) < 1e-6 &&
-                    kotlin.math.abs(mark.longitude - dest.longitude) < 1e-6
-                ) {
-                    return@forEach
-                }
-                val icon = createMarkPinIcon(context, mark.displayName, mark.color)
-                val opt = MarkerOptions()
-                    .position(LatLng(mark.latitude, mark.longitude))
-                    .title(mark.displayName)
-                if (icon != null) opt.icon = icon
-                newMarkers.add(map.addMarker(opt))
-            }
-            activeMarkMarkers = newMarkers
-        } catch (e: Exception) {
-            android.util.Log.e("ConvoyMapView", "Failed to update marks", e)
+    // 4. Synchronize Convoy Member Markers (refresh every 15s so "Xm ago" stays current)
+    var presenceTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(15_000L)
+            presenceTick++
         }
     }
-
-    // 4. Synchronize Convoy Member Markers
-    LaunchedEffect(isMapReady, members, selfClientId) {
+    LaunchedEffect(isMapReady, members, selfClientId, presenceTick) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isMapReady) return@LaunchedEffect
 
@@ -377,12 +475,23 @@ fun ConvoyMapView(
                 val mLng = member.longitude
                 if (mLat != null && mLng != null && mLat != 0.0 && mLng != 0.0) {
                     val mColor = member.avatarColor ?: "#0EA5E9"
-                    val timeAgo = ConvoyUtils.formatTimeAgo(member.lastLocationAt ?: member.lastSeenAt)
+                    val ago = ConvoyUtils.formatTimeAgo(member.lastLocationAt ?: member.lastSeenAt)
+                    val timeAgo = when {
+                        ago != null -> ago
+                        member.connectionStatus == MemberConnectionStatus.OFFLINE -> "offline"
+                        member.connectionStatus == MemberConnectionStatus.RECONNECTING -> "syncing"
+                        else -> null
+                    }
                     val mIcon = createVehicleMarkerIcon(context, member.displayName, mColor, timeAgo)
                     val opt = MarkerOptions()
                         .position(LatLng(mLat, mLng))
                         .title(member.displayName)
-                        .snippet(if (timeAgo != null) "Last seen $timeAgo" else "Speed: ${((member.speed ?: 0.0) * 3.6).toInt()} km/h")
+                        .snippet(
+                            when {
+                                timeAgo != null -> "Last seen $timeAgo"
+                                else -> "Speed: ${((member.speed ?: 0.0) * 3.6).toInt()} km/h"
+                            }
+                        )
                     if (mIcon != null) opt.icon = mIcon
                     newMemberMarkers.add(map.addMarker(opt))
                 }
@@ -402,9 +511,8 @@ fun ConvoyMapView(
                 .testTag("convoy_map_view")
         )
 
-        // Self Location Puck / 3D Vehicle Navigation Arrow Overlay
-        // Immune to orientation changes, 3D tilt clipping, and map recreation
-        if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
+        // Self Location Puck — only while GPS button is active (Maps / Neshan style)
+        if (isMyLocationActive && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
             val density = LocalDensity.current
             val screenW = constraints.maxWidth.toFloat()
             val screenH = constraints.maxHeight.toFloat()
@@ -428,8 +536,9 @@ fun ConvoyMapView(
                     mapBearing = currentMapBearing,
                     userColor = userColor,
                     initial = selfDisplayName.trim().take(1).uppercase().ifEmpty { "•" },
-                    modifier = Modifier.offset {
-                        val sizeDp = if (isNavigating) 60.dp else 52.dp
+                    // absoluteOffset: MapLibre screen pixels are LTR; offset() mirrors X in RTL
+                    modifier = Modifier.absoluteOffset {
+                        val sizeDp = 52.dp
                         val halfPx = with(density) { (sizeDp / 2f).toPx() }
                         IntOffset(
                             x = (pt.x - halfPx).roundToInt(),
@@ -444,10 +553,17 @@ fun ConvoyMapView(
         destination?.let { dest ->
             destScreenPoint?.let { pt ->
                 val density = LocalDensity.current
-                val beaconSizeDp = 130.dp
+                val beaconSizeDp = 100.dp
                 val halfBeaconPx = with(density) { (beaconSizeDp / 2f).toPx() }
                 val targetColor = try {
-                    Color(android.graphics.Color.parseColor(dest.colorHex ?: selfColorHex))
+                    val ownerId = dest.updatedById
+                    val ownerHex = when {
+                        ownerId.isBlank() || ownerId == selfClientId -> selfColorHex
+                        else -> members.find { it.id == ownerId }?.avatarColor
+                            ?: dest.colorHex
+                            ?: selfColorHex
+                    }
+                    Color(android.graphics.Color.parseColor(ownerHex))
                 } catch (_: Exception) {
                     Color(0xFF0EA5E9)
                 }
@@ -464,13 +580,70 @@ fun ConvoyMapView(
                         color = targetColor,
                         initial = destInitial,
                         modifier = Modifier
-                            .offset {
+                            .absoluteOffset {
                                 IntOffset(
                                     x = (pt.x - halfBeaconPx).roundToInt(),
                                     y = (pt.y - halfBeaconPx).roundToInt()
                                 )
                             }
                     )
+                }
+            }
+        }
+
+        // Other convoy marks: same small radiating beacon as destination
+        if (marks.isNotEmpty()) {
+            val density = LocalDensity.current
+            val beaconSizeDp = 100.dp
+            val halfBeaconPx = with(density) { (beaconSizeDp / 2f).toPx() }
+            val screenW = constraints.maxWidth.toFloat()
+            val screenH = constraints.maxHeight.toFloat()
+            val dest = destination
+            val colorById = members.associate { it.id to (it.avatarColor ?: "#0EA5E9") }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds()
+            ) {
+                marks.forEach { (markId, mark) ->
+                    if (dest != null &&
+                        kotlin.math.abs(mark.latitude - dest.latitude) < 1e-6 &&
+                        kotlin.math.abs(mark.longitude - dest.longitude) < 1e-6
+                    ) {
+                        return@forEach
+                    }
+                    val pt = markScreenPoints[markId] ?: return@forEach
+                    if (pt.x !in -120f..(screenW + 120f) || pt.y !in -120f..(screenH + 120f)) {
+                        return@forEach
+                    }
+                    val markHex = when {
+                        mark.clientId == selfClientId -> selfColorHex
+                        else -> colorById[mark.clientId] ?: mark.color
+                    }
+                    val markColor = try {
+                        Color(android.graphics.Color.parseColor(markHex))
+                    } catch (_: Exception) {
+                        Color(0xFF0EA5E9)
+                    }
+                    val initial = mark.displayName.trim().take(1).uppercase().ifEmpty { "•" }
+
+                    key(markId) {
+                        RadiatingTargetMarker(
+                            color = markColor,
+                            initial = initial,
+                            modifier = Modifier
+                                .absoluteOffset {
+                                    IntOffset(
+                                        x = (pt.x - halfBeaconPx).roundToInt(),
+                                        y = (pt.y - halfBeaconPx).roundToInt()
+                                    )
+                                }
+                                .clickable {
+                                    onMarkSelected?.invoke(mark)
+                                }
+                        )
+                    }
                 }
             }
         }
@@ -500,42 +673,6 @@ fun ConvoyMapView(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-
-        // Active Speaker Radio Indicator (Top HUD)
-        AnimatedVisibility(
-            visible = activeSpeakerName != null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 70.dp)
-        ) {
-            Surface(
-                color = CaravanEmerald.copy(alpha = 0.92f),
-                shape = RoundedCornerShape(24.dp),
-                shadowElevation = 8.dp
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Mic,
-                        contentDescription = "Active Speaker",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "$activeSpeakerName is talking...",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -585,25 +722,25 @@ fun ConvoyMapView(
                     Icon(Icons.Default.Remove, contentDescription = "Zoom Out", modifier = Modifier.size(20.dp))
                 }
 
-                // Recenter GPS
+                // GPS / my-location — off (gray) until tapped; on (blue) while tracking
+                val gpsActive = isMyLocationActive
                 SmallFloatingActionButton(
                     onClick = {
-                        if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
-                            mapLibreMap?.animateCamera(
-                                CameraUpdateFactory.newCameraPosition(
-                                    CameraPosition.Builder()
-                                        .target(LatLng(currentLocation.latitude, currentLocation.longitude))
-                                        .zoom(if (isNavigating) 16.5 else 15.0)
-                                        .tilt(if (isNavigating) 50.0 else 0.0)
-                                        .bearing(if (isNavigating) currentLocation.heading else 0.0)
-                                        .build()
-                                ),
-                                800
-                            )
+                        if (onMyLocationClick()) {
+                            recenterRequestedAt = System.currentTimeMillis()
                         }
                     },
-                    containerColor = if (isDarkMode) NightSlateCard else Color.White,
-                    contentColor = CaravanBlue,
+                    containerColor = if (gpsActive) {
+                        CaravanBlue
+                    } else if (isDarkMode) {
+                        NightSlateCard
+                    } else {
+                        Color.White
+                    },
+                    contentColor = if (gpsActive) Color.White else {
+                        if (isDarkMode) Color.White.copy(alpha = 0.55f)
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                    },
                     shape = CircleShape,
                     modifier = Modifier
                         .size(48.dp)
@@ -611,7 +748,7 @@ fun ConvoyMapView(
                 ) {
                     Icon(
                         Icons.Default.MyLocation,
-                        contentDescription = "Recenter",
+                        contentDescription = "My location",
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -734,59 +871,7 @@ private fun createVehicleMarkerIcon(
 }
 
 /**
- * Creates user-placed map mark pin icons.
- */
-private fun createMarkPinIcon(
-    context: Context,
-    label: String,
-    colorHex: String
-): Icon? {
-    return try {
-        val density = context.resources.displayMetrics.density
-        val sizeDp = 38
-        val sizePx = (sizeDp * density).toInt()
-        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(bitmap)
-
-        val cx = sizePx / 2f
-        val cy = sizePx / 2f
-        val paint = Paint().apply { isAntiAlias = true }
-
-        val pinColor = try {
-            android.graphics.Color.parseColor(colorHex)
-        } catch (_: Exception) {
-            android.graphics.Color.parseColor("#06B6D4")
-        }
-
-        // Soft shadow
-        paint.color = android.graphics.Color.parseColor("#33000000")
-        canvas.drawCircle(cx, cy + (1.5f * density), 13.5f * density, paint)
-
-        // Outer white border
-        paint.color = android.graphics.Color.WHITE
-        canvas.drawCircle(cx, cy, 13 * density, paint)
-
-        // Inner fill
-        paint.color = pinColor
-        canvas.drawCircle(cx, cy, 10.5f * density, paint)
-
-        // Clean initial
-        paint.color = android.graphics.Color.WHITE
-        paint.textSize = 11.5f * density
-        paint.typeface = Typeface.DEFAULT_BOLD
-        paint.textAlign = Paint.Align.CENTER
-        val initial = label.trim().take(1).uppercase().ifEmpty { "•" }
-        val textY = cy - ((paint.descent() + paint.ascent()) / 2f)
-        canvas.drawText(initial, cx, textY, paint)
-
-        IconFactory.getInstance(context).fromBitmap(bitmap)
-    } catch (e: Exception) {
-        null
-    }
-}
-
-/**
- * Destination marker: user-initial circle with radiating rings.
+ * Destination / mark marker: user-initial circle with radiating rings.
  */
 @Composable
 fun RadiatingTargetMarker(
@@ -817,49 +902,50 @@ fun RadiatingTargetMarker(
     )
 
     Box(
-        modifier = modifier.size(130.dp),
+        modifier = modifier.size(100.dp),
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val center = Offset(size.width / 2f, size.height / 2f)
-            val coreR = 14.dp.toPx()
+            val coreR = 8.dp.toPx()
 
-            val r1 = coreR + (wave1Progress * 42.dp.toPx())
+            val r1 = coreR + (wave1Progress * 32.dp.toPx())
             drawCircle(
                 color = color.copy(alpha = (1f - wave1Progress).coerceIn(0f, 1f) * 0.85f),
                 radius = r1,
                 center = center,
-                style = Stroke(width = 2.4.dp.toPx())
+                style = Stroke(width = 2.0.dp.toPx())
             )
 
-            val r2 = coreR + (wave2Progress * 42.dp.toPx())
+            val r2 = coreR + (wave2Progress * 32.dp.toPx())
             drawCircle(
                 color = color.copy(alpha = (1f - wave2Progress).coerceIn(0f, 1f) * 0.85f),
                 radius = r2,
                 center = center,
-                style = Stroke(width = 2.0.dp.toPx())
+                style = Stroke(width = 1.6.dp.toPx())
             )
 
             drawCircle(
                 color = Color.Black.copy(alpha = 0.3f),
                 radius = coreR,
-                center = Offset(center.x, center.y + 1.5.dp.toPx())
+                center = Offset(center.x, center.y + 1.2.dp.toPx())
             )
-            drawCircle(color = Color.White, radius = coreR + 2.5.dp.toPx(), center = center)
+            drawCircle(color = Color.White, radius = coreR + 1.8.dp.toPx(), center = center)
             drawCircle(color = color, radius = coreR, center = center)
         }
 
         Text(
             text = initial,
             color = Color.White,
-            fontSize = 14.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Bold
         )
     }
 }
 
 /**
- * Self overlay: nav chevron while driving; idle = initial circle + facing triangle (O>).
+ * Self overlay: same initial circle + facing triangle (O>) in idle and driving.
+ * While navigating, pitch the puck to match the map's 3D tilt so it sits on the ground plane.
  */
 @Composable
 fun SelfPuckOrVehicleArrow(
@@ -870,87 +956,59 @@ fun SelfPuckOrVehicleArrow(
     initial: String,
     modifier: Modifier = Modifier
 ) {
-    if (isNavigating) {
-        androidx.compose.foundation.Canvas(modifier = modifier.size(60.dp)) {
+    val density = LocalDensity.current
+    val relativeHeading = ((heading - mapBearing + 360.0) % 360.0).toFloat()
+
+    Box(
+        modifier = modifier
+            .size(52.dp)
+            .graphicsLayer {
+                if (isNavigating) {
+                    // Match ConvoyMapView nav camera tilt (50°) so the puck foreshortens on the road.
+                    rotationX = 50f
+                    cameraDistance = 16f * density.density
+                    transformOrigin = TransformOrigin(0.5f, 0.85f)
+                    // No shadowElevation — it draws a rectangular halo around the Box.
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = size.width / 2f
             val cy = size.height / 2f
+            val coreR = 12.dp.toPx()
+
+            rotate(degrees = relativeHeading, pivot = Offset(cx, cy)) {
+                // Small forward triangle (O>) — tip points in heading direction
+                val baseY = cy - coreR - 1.dp.toPx()
+                val tri = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(cx, baseY - 9.dp.toPx())
+                    lineTo(cx + 5.5.dp.toPx(), baseY)
+                    lineTo(cx - 5.5.dp.toPx(), baseY)
+                    close()
+                }
+                drawPath(path = tri, color = userColor)
+                drawPath(
+                    path = tri,
+                    color = Color.White,
+                    style = Stroke(width = 1.5.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                )
+            }
 
             drawCircle(
                 color = Color.Black.copy(alpha = 0.28f),
-                radius = 24.dp.toPx(),
-                center = Offset(cx, cy + 4.dp.toPx())
+                radius = coreR,
+                center = Offset(cx, cy + 1.2.dp.toPx())
             )
-
-            val outerPath = androidx.compose.ui.graphics.Path().apply {
-                moveTo(cx, cy - 22.dp.toPx())
-                lineTo(cx + 18.dp.toPx(), cy + 16.dp.toPx())
-                lineTo(cx, cy + 9.dp.toPx())
-                lineTo(cx - 18.dp.toPx(), cy + 16.dp.toPx())
-                close()
-            }
-            drawPath(path = outerPath, color = Color.White)
-
-            val innerPath = androidx.compose.ui.graphics.Path().apply {
-                moveTo(cx, cy - 18.dp.toPx())
-                lineTo(cx + 14.dp.toPx(), cy + 13.dp.toPx())
-                lineTo(cx, cy + 7.dp.toPx())
-                lineTo(cx - 14.dp.toPx(), cy + 13.dp.toPx())
-                close()
-            }
-            drawPath(path = innerPath, color = CaravanAmber)
-
-            val spinePath = androidx.compose.ui.graphics.Path().apply {
-                moveTo(cx, cy - 18.dp.toPx())
-                lineTo(cx + 1.5.dp.toPx(), cy + 7.dp.toPx())
-                lineTo(cx - 1.5.dp.toPx(), cy + 7.dp.toPx())
-                close()
-            }
-            drawPath(path = spinePath, color = Color.White.copy(alpha = 0.75f))
+            drawCircle(color = Color.White, radius = coreR + 2.2.dp.toPx(), center = Offset(cx, cy))
+            drawCircle(color = userColor, radius = coreR, center = Offset(cx, cy))
         }
-    } else {
-        val relativeHeading = ((heading - mapBearing + 360.0) % 360.0).toFloat()
 
-        Box(
-            modifier = modifier.size(52.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                val cx = size.width / 2f
-                val cy = size.height / 2f
-                val coreR = 12.dp.toPx()
-
-                rotate(degrees = relativeHeading, pivot = Offset(cx, cy)) {
-                    // Small forward triangle (O>) — tip points in heading direction
-                    val baseY = cy - coreR - 1.dp.toPx()
-                    val tri = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(cx, baseY - 9.dp.toPx())
-                        lineTo(cx + 5.5.dp.toPx(), baseY)
-                        lineTo(cx - 5.5.dp.toPx(), baseY)
-                        close()
-                    }
-                    drawPath(path = tri, color = userColor)
-                    drawPath(
-                        path = tri,
-                        color = Color.White,
-                        style = Stroke(width = 1.5.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round)
-                    )
-                }
-
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.28f),
-                    radius = coreR,
-                    center = Offset(cx, cy + 1.2.dp.toPx())
-                )
-                drawCircle(color = Color.White, radius = coreR + 2.2.dp.toPx(), center = Offset(cx, cy))
-                drawCircle(color = userColor, radius = coreR, center = Offset(cx, cy))
-            }
-
-            Text(
-                text = initial,
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
+        Text(
+            text = initial,
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }

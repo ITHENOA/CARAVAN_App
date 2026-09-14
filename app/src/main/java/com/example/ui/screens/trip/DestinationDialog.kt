@@ -6,11 +6,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Flag
-import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,10 +41,11 @@ fun DestinationDialog(
     var label by remember { mutableStateOf("Scenic Overlook") }
     var latStr by remember { mutableStateOf(String.format(java.util.Locale.US, "%.5f", userLocation.latitude + 0.025)) }
     var lngStr by remember { mutableStateOf(String.format(java.util.Locale.US, "%.5f", userLocation.longitude + 0.025)) }
+    val scheme = MaterialTheme.colorScheme
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = NightSlateCard,
+        containerColor = scheme.surface,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -56,7 +57,7 @@ fun DestinationDialog(
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = "Set Convoy Destination",
-                    color = TextPrimary,
+                    color = scheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -66,7 +67,7 @@ fun DestinationDialog(
                 Text(
                     text = "Quick Presets:",
                     style = MaterialTheme.typography.labelMedium,
-                    color = TextSecondary
+                    color = scheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -84,9 +85,9 @@ fun DestinationDialog(
                             },
                             label = { Text(preset.name, fontSize = 12.sp) },
                             colors = FilterChipDefaults.filterChipColors(
-                                containerColor = NightSlateSurface,
+                                containerColor = scheme.surfaceVariant,
                                 selectedContainerColor = CaravanAmber.copy(alpha = 0.3f),
-                                labelColor = TextPrimary,
+                                labelColor = scheme.onSurface,
                                 selectedLabelColor = CaravanAmber
                             )
                         )
@@ -104,10 +105,10 @@ fun DestinationDialog(
                         .testTag("destination_name_input"),
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
+                        focusedTextColor = scheme.onSurface,
+                        unfocusedTextColor = scheme.onSurface,
                         focusedBorderColor = CaravanAmber,
-                        unfocusedBorderColor = NightSlateBorder
+                        unfocusedBorderColor = scheme.outline
                     )
                 )
 
@@ -123,10 +124,10 @@ fun DestinationDialog(
                             .testTag("destination_lat_input"),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
+                            focusedTextColor = scheme.onSurface,
+                            unfocusedTextColor = scheme.onSurface,
                             focusedBorderColor = CaravanAmber,
-                            unfocusedBorderColor = NightSlateBorder
+                            unfocusedBorderColor = scheme.outline
                         )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -139,10 +140,10 @@ fun DestinationDialog(
                             .testTag("destination_lng_input"),
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
+                            focusedTextColor = scheme.onSurface,
+                            unfocusedTextColor = scheme.onSurface,
                             focusedBorderColor = CaravanAmber,
-                            unfocusedBorderColor = NightSlateBorder
+                            unfocusedBorderColor = scheme.outline
                         )
                     )
                 }
@@ -162,12 +163,12 @@ fun DestinationDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = CaravanAmber),
                 modifier = Modifier.testTag("confirm_set_destination_button")
             ) {
-                Text("Broadcast Route", color = NightSlateBg, fontWeight = FontWeight.Bold)
+                Text("Broadcast Route", color = Color(0xFF0A0E17), fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextSecondary)
+                Text("Cancel", color = scheme.onSurfaceVariant)
             }
         }
     )

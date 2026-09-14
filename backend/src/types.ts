@@ -7,6 +7,7 @@ export const MAX_CAR_NAME = 40;
 export const MAX_LABEL = 80;
 
 export type ConnectionStatus = "connected" | "reconnecting" | "offline";
+export type MemberKind = "vehicle" | "person";
 
 export interface Destination {
   latitude: number;
@@ -31,6 +32,7 @@ export interface MemberPublic {
   id: string;
   displayName: string;
   carName?: string;
+  memberKind?: MemberKind;
   avatarColor?: string;
   latitude?: number;
   longitude?: number;
@@ -60,6 +62,7 @@ export interface SocketAttachment {
   isLeader: boolean;
   displayName?: string;
   carName?: string;
+  memberKind?: MemberKind;
   avatarColor?: string;
   lastLocationAt?: number;
   msgWindowStart: number;
@@ -71,6 +74,7 @@ export type ClientMessageType =
   | "leave"
   | "location_update"
   | "destination_update"
+  | "destination_clear"
   | "map_mark"
   | "map_mark_clear"
   | "route_update"
@@ -92,6 +96,7 @@ export type ServerMessageType =
   | "members_snapshot"
   | "location_update"
   | "destination_update"
+  | "destination_clear"
   | "map_mark"
   | "map_mark_clear"
   | "route_update"
@@ -121,6 +126,7 @@ export interface JoinMessage extends BaseMessage {
   clientId: string;
   displayName: string;
   carName?: string;
+  memberKind?: MemberKind;
   avatarColor?: string;
   inviteCode: string;
   leaderToken?: string;
@@ -141,6 +147,14 @@ export interface DestinationUpdateMessage extends BaseMessage {
   longitude: number;
   label?: string;
   leaderToken: string;
+  /** Client's last-known destination.updatedAt; reject if server is newer. */
+  ifUpdatedAt?: number;
+}
+
+export interface DestinationClearMessage extends BaseMessage {
+  type: "destination_clear";
+  leaderToken: string;
+  ifUpdatedAt?: number;
 }
 
 export interface MapMarkMessage extends BaseMessage {
@@ -219,6 +233,7 @@ export type ClientMessage =
   | LeaveMessage
   | LocationUpdateMessage
   | DestinationUpdateMessage
+  | DestinationClearMessage
   | MapMarkMessage
   | MapMarkClearMessage
   | RouteUpdateMessage

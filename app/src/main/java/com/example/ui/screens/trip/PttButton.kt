@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.sp
 import com.example.data.voice.PttState
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeout
 
 @Composable
 fun PttButton(
@@ -276,6 +275,92 @@ fun ChatFab(
                         .size(10.dp)
                         .background(CaravanCrimson, CircleShape)
                 )
+            }
+        }
+    }
+}
+
+/** Record-then-send voice note. Same hold / tap-to-latch UX as [PttButton]. */
+@Composable
+fun VoiceNoteButton(
+    isRecording: Boolean,
+    audioAmplitude: Float = 0f,
+    enabled: Boolean = true,
+    onToggle: () -> Unit,
+    onStart: () -> Unit,
+    onRelease: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    var isLatched by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isRecording) {
+        if (!isRecording) isLatched = false
+    }
+
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            isRecording -> CaravanPurple
+            !enabled -> MaterialTheme.colorScheme.outline
+            else -> CaravanEmerald
+        },
+        label = "voice_note_bg"
+    )
+
+    val currentRecording by rememberUpdatedState(isRecording)
+    val currentOnToggle by rememberUpdatedState(onToggle)
+    val currentOnStart by rememberUpdatedState(onStart)
+    val currentOnRelease by rememberUpdatedState(onRelease)
+
+    Box(
+        modifier = modifier
+            .size(64.dp)
+            .shadow(elevation = if (isRecording) 12.dp else 4.dp, shape = RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(22.dp))
+            .background(backgroundColor)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitFirstDown(requireUnconsumed = false)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                        if (currentRecording) {
+                            waitForUpOrCancellation()
+                            isLatched = false
+                            currentOnRelease()
+                        } else {
+                            try {
+                                val up = withTimeout(280L) {
+                                    waitForUpOrCancellation()
+                                }
+                                if (up != null) {
+                                    isLatched = true
+                                    currentOnToggle()
+                                }
+                            } catch (_: PointerEventTimeoutCancellationException) {
+                                isLatched = false
+                                currentOnStart()
+                                waitForUpOrCancellation()
+                                currentOnRelease()
+                            }
+                        }
+                    }
+                }
+            }
+            .testTag("voice_note_button"),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = if (isRecording) Icons.Default.Mic else Icons.Default.MicNone,
+                contentDescription = if (isRecording) "Stop voice note" else "Record voice note",
+                tint = Color.White,
+                modifier = Modifier.size(26.dp)
+            )
+            if (isRecording) {
+                Spacer(modifier = Modifier.height(4.dp))
+                LiveAudioWaveform(amplitude = audioAmplitude)
             }
         }
     }

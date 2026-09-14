@@ -63,15 +63,15 @@ fun QuickPromptsBar(
                         text = prompt,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = TextPrimary
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 },
                 colors = SuggestionChipDefaults.suggestionChipColors(
-                    containerColor = NightSlateCard
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
                 border = SuggestionChipDefaults.suggestionChipBorder(
                     enabled = true,
-                    borderColor = NightSlateBorder
+                    borderColor = MaterialTheme.colorScheme.outline
                 ),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.testTag("quick_prompt_chip_$index")
@@ -93,7 +93,7 @@ fun HeadsUpAlertBanner(
     ) {
         alert?.let { msg ->
             Surface(
-                color = NightSlateCard.copy(alpha = 0.95f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
                 shape = RoundedCornerShape(14.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, CaravanAmber.copy(alpha = 0.6f)),
                 shadowElevation = 8.dp,

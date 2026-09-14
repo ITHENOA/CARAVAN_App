@@ -161,16 +161,7 @@ class VoiceController extends Notifier<VoiceState> {
         }
         return;
       }
-      if (trip.activeSpeakerId != null &&
-          trip.activeSpeakerId != trip.clientId) {
-        state = state.copyWith(
-          ui: PttUiState.busy,
-          error: 'busy',
-          latched: false,
-        );
-        _wantLive = false;
-        return;
-      }
+      // Someone else talking is fine — keep waiting for our own grant.
     }
     if (_wantLive && gen == _pressGeneration) {
       state = state.copyWith(

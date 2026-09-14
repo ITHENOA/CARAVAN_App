@@ -33,11 +33,12 @@ fun ChatBottomSheet(
 ) {
     var inputText by remember { mutableStateOf("") }
     val timeFormatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val scheme = MaterialTheme.colorScheme
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = NightSlateSurface,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = NightSlateBorder) }
+        containerColor = scheme.surface,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = scheme.outline) }
     ) {
         Column(
             modifier = Modifier
@@ -48,7 +49,7 @@ fun ChatBottomSheet(
                 text = "Convoy Radio & Messages",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary
+                color = scheme.onSurface
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -92,7 +93,7 @@ fun ChatBottomSheet(
                         }
 
                         Surface(
-                            color = if (isMe) CaravanBlueDark else NightSlateCard,
+                            color = if (isMe) CaravanBlueDark else scheme.surfaceVariant,
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.widthIn(max = 280.dp)
                         ) {
@@ -109,13 +110,13 @@ fun ChatBottomSheet(
                                 Text(
                                     text = msg.text,
                                     fontSize = 14.sp,
-                                    color = TextPrimary
+                                    color = if (isMe) Color.White else scheme.onSurface
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = timeFormatter.format(Date(msg.timestamp)),
                                     fontSize = 10.sp,
-                                    color = TextMuted,
+                                    color = if (isMe) Color.White.copy(alpha = 0.7f) else scheme.onSurfaceVariant,
                                     modifier = Modifier.align(Alignment.End)
                                 )
                             }
@@ -136,18 +137,18 @@ fun ChatBottomSheet(
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
-                    placeholder = { Text("Broadcast message...", color = TextMuted) },
+                    placeholder = { Text("Broadcast message...", color = scheme.onSurfaceVariant) },
                     modifier = Modifier
                         .weight(1f)
                         .testTag("chat_input_field"),
                     shape = RoundedCornerShape(24.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = NightSlateCard,
-                        unfocusedContainerColor = NightSlateCard,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = scheme.surfaceVariant,
+                        unfocusedContainerColor = scheme.surfaceVariant,
+                        focusedTextColor = scheme.onSurface,
+                        unfocusedTextColor = scheme.onSurface,
                         focusedBorderColor = CaravanBlue,
-                        unfocusedBorderColor = NightSlateBorder
+                        unfocusedBorderColor = scheme.outline
                     ),
                     maxLines = 2
                 )

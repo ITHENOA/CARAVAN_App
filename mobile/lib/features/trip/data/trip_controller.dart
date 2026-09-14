@@ -234,13 +234,30 @@ class TripController extends Notifier<ActiveTripState> {
       state = state.copyWith(errorMessage: 'Leader only');
       return;
     }
+    final ifUpdatedAt = state.destination?.updatedAt.millisecondsSinceEpoch;
+    clearPublishedRoute();
     _ws?.send(
       buildDestinationUpdate(
         latitude: latitude,
         longitude: longitude,
         leaderToken: token,
         label: label,
+        ifUpdatedAt: ifUpdatedAt,
       ),
+    );
+  }
+
+  void clearDestination() {
+    final token = state.leaderToken;
+    if (token == null) {
+      state = state.copyWith(errorMessage: 'Leader only');
+      return;
+    }
+    final ifUpdatedAt = state.destination?.updatedAt.millisecondsSinceEpoch;
+    state = state.copyWith(clearDestination: true);
+    clearPublishedRoute();
+    _ws?.send(
+      buildDestinationClear(leaderToken: token, ifUpdatedAt: ifUpdatedAt),
     );
   }
 
@@ -474,11 +491,25 @@ class TripController extends Notifier<ActiveTripState> {
         state = state.copyWith(members: members);
       case 'destination_update':
         if (raw['destination'] is Map) {
-          state = state.copyWith(
-            destination: TripDestination.fromJson(
-              Map<String, dynamic>.from(raw['destination'] as Map),
-            ),
+          final dest = TripDestination.fromJson(
+            Map<String, dynamic>.from(raw['destination'] as Map),
           );
+          final current = state.destination;
+          if (current != null &&
+              dest.updatedAt.isBefore(current.updatedAt)) {
+            break;
+          }
+          state = state.copyWith(destination: dest);
+          final id = state.clientId;
+          if (id != null && state.routes.containsKey(id)) {
+            clearPublishedRoute();
+          }
+        }
+      case 'destination_clear':
+        state = state.copyWith(clearDestination: true);
+        final clearSelfId = state.clientId;
+        if (clearSelfId != null && state.routes.containsKey(clearSelfId)) {
+          clearPublishedRoute();
         }
       case 'map_mark':
         if (raw['mark'] is Map) {
@@ -534,7 +565,12 @@ class TripController extends Notifier<ActiveTripState> {
           errorMessage: 'ptt_busy',
         );
       case 'ptt_release':
-        state = state.copyWith(clearSpeaker: true);
+        final releasedId = raw['clientId'] as String?;
+        if (releasedId == null ||
+            releasedId == state.activeSpeakerId ||
+            releasedId == state.clientId) {
+          state = state.copyWith(clearSpeaker: true);
+        }
       case 'webrtc_offer':
       case 'webrtc_answer':
       case 'ice_candidate':

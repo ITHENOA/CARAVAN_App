@@ -17,13 +17,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.TripMember
+import com.example.data.voice.PttState
+import com.example.ui.screens.home.InviteShareDialog
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.CaravanConnectionStatus
 import com.example.ui.viewmodel.CaravanViewModel
 import com.example.ui.viewmodel.RoutingProvider
 import com.example.util.ConvoyUtils
@@ -32,6 +36,7 @@ import com.example.util.ConvoyUtils
 fun TripScreen(
     viewModel: CaravanViewModel,
     onNavigateBack: () -> Unit,
+    onNavigateToSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -39,14 +44,24 @@ fun TripScreen(
     val currentLocation by viewModel.currentLocation.collectAsState()
     val userProfile by viewModel.userProfile.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val isMyLocationActive by viewModel.isMyLocationActive.collectAsState()
 
     var showFleetSheet by remember { mutableStateOf(false) }
     var showChatSheet by remember { mutableStateOf(false) }
     var showDestinationDialog by remember { mutableStateOf(false) }
     var showLeaveConfirmDialog by remember { mutableStateOf(false) }
     var showQuickPrompts by remember { mutableStateOf(false) }
+    var showInviteShare by remember { mutableStateOf(false) }
 
     val quickPrompts = remember { viewModel.prefs.getQuickPrompts() }
+
+    // Keep display awake while driving (Google Maps / Neshan style)
+    val view = LocalView.current
+    DisposableEffect(tripState.isNavigating) {
+        val previous = view.keepScreenOn
+        view.keepScreenOn = tripState.isNavigating
+        onDispose { view.keepScreenOn = previous }
+    }
 
     Box(
         modifier = modifier
@@ -63,18 +78,34 @@ fun TripScreen(
             isCalculatingRoute = tripState.isCalculatingRoute,
             isDarkMode = isDarkMode,
             isNavigating = tripState.isNavigating,
-            activeSpeakerName = tripState.activeSpeakerName,
+            isMyLocationActive = isMyLocationActive,
             selfColorHex = userProfile.avatarColor,
             selfClientId = userProfile.clientId,
             selfDisplayName = userProfile.displayName,
             marks = tripState.marks,
             sharedRoutes = tripState.sharedRoutes,
             onLongPressMark = { lat, lng ->
-                viewModel.setDestination(lat, lng, "Marked Point")
+                viewModel.placeMapMark(lat, lng)
             },
             onMemberSelected = { /* Focus member */ },
             onMarkSelected = { mark ->
-                viewModel.navigateToMemberMark(mark)
+                // Only the mark owner can start nav from the pin; others use fleet "Go to Mark"
+                if (mark.clientId == userProfile.clientId) {
+                    viewModel.navigateToMemberMark(mark)
+                }
+            },
+            onMyLocationClick = {
+                if (!viewModel.onMyLocationButtonClick()) {
+                    Toast.makeText(
+                        context,
+                        "برای نمایش موقعیت، لوکیشن گوشی را روشن کنید",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    viewModel.openLocationSettings()
+                    false
+                } else {
+                    true
+                }
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -90,15 +121,69 @@ fun TripScreen(
             ConvoyTopBar(
                 tripName = tripState.tripName,
                 inviteCode = tripState.inviteCode,
+                tripId = tripState.tripId,
                 connectionStatus = tripState.connectionStatus,
-                memberCount = tripState.members.size + 1,
+                memberCount = tripState.members.count { it.id != userProfile.clientId },
                 isDarkMode = isDarkMode,
                 onToggleDarkMode = { viewModel.toggleDarkMode() },
                 onOpenDestinationDialog = { showDestinationDialog = true },
                 onToggleFleetList = { showFleetSheet = true },
-                onOpenSettings = { /* Settings */ },
-                onLeaveTrip = { showLeaveConfirmDialog = true }
+                onOpenSettings = onNavigateToSettings,
+                onLeaveTrip = { showLeaveConfirmDialog = true },
+                onShareInvite = { showInviteShare = true }
             )
+
+            tripState.connectionError?.takeIf {
+                tripState.connectionStatus != CaravanConnectionStatus.CONNECTED
+            }?.let { err ->
+                val fixLabel = when (tripState.connectionFixStep) {
+                    com.example.ui.viewmodel.ConnectionFixStep.TRY_GOOGLE_DNS -> "Google DNS"
+                    com.example.ui.viewmodel.ConnectionFixStep.TRY_AETHER -> "Aether"
+                    com.example.ui.viewmodel.ConnectionFixStep.OPEN_SETTINGS_OR_VPN -> "Settings / VPN"
+                }
+                Surface(
+                    color = CaravanAmber.copy(alpha = 0.92f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag("ws_connection_error_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = err,
+                            color = Color.Black,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            onClick = {
+                                viewModel.applySuggestedConnectionFix(
+                                    context = context,
+                                    onOpenSettings = onNavigateToSettings
+                                )
+                            },
+                            color = Color.Black.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("ws_connection_fix_action")
+                        ) {
+                            Text(
+                                text = fixLabel,
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
 
             // Active Destination & Routing HUD Card (Only shown when destination is set)
             tripState.destination?.let { dest ->
@@ -247,45 +332,105 @@ fun TripScreen(
                             }
                         }
                     } else {
-                        // Non-driving mode: Shows point info and 1x2 buttons to launch navigation
-                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        // Pre-drive: same mini Regular/Neshan/X as driving mode.
+                        // Start appears only after the user picks a provider.
+                        val selectedProvider = tripState.routingProvider
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Navigation,
-                                        contentDescription = null,
-                                        tint = CaravanBlue,
-                                        modifier = Modifier.size(24.dp)
+                                Icon(
+                                    Icons.Default.Navigation,
+                                    contentDescription = null,
+                                    tint = CaravanBlue,
+                                    modifier = Modifier.size(24.dp)
+                                )
+
+                                Spacer(modifier = Modifier.width(10.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = dest.label ?: "Marked Point",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = dest.label ?: "Marked Point",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            text = "${ConvoyUtils.formatDistance(distM)} • ETA: $etaStr",
-                                            fontSize = 12.sp,
-                                            color = CaravanBlue,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                    Text(
+                                        text = "${ConvoyUtils.formatDistance(distM)} • ETA: $etaStr",
+                                        fontSize = 11.sp,
+                                        color = CaravanBlue,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                Surface(
+                                    onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.OSRM) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(1.dp, if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.outlineVariant),
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("btn_regular_nav_mini")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        if (isCalculating && isOsrmActive) {
+                                            CircularProgressIndicator(
+                                                strokeWidth = 2.dp,
+                                                color = if (isOsrmActive) Color.White else CaravanBlue,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        } else {
+                                            Icon(
+                                                Icons.Default.Navigation,
+                                                contentDescription = "Regular Route",
+                                                tint = if (isOsrmActive) Color.White else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
 
-                                // Dismiss / Clear Destination
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                Surface(
+                                    onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.NESHAN) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(1.dp, if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.outlineVariant),
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("btn_neshan_nav_mini")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        if (isCalculating && isNeshanActive) {
+                                            CircularProgressIndicator(
+                                                strokeWidth = 2.dp,
+                                                color = if (isNeshanActive) Color.White else neshanGreen,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        } else {
+                                            Icon(
+                                                Icons.Default.Traffic,
+                                                contentDescription = "Neshan Route",
+                                                tint = if (isNeshanActive) Color.White else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(4.dp))
+
                                 IconButton(
                                     onClick = { viewModel.stopNavigation() },
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(32.dp)
                                 ) {
                                     Icon(
                                         Icons.Default.Close,
@@ -296,84 +441,34 @@ fun TripScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // 1x2 Buttons: Regular Navigation (Left) and Neshan Navigation (Right)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
+                            if (selectedProvider != null) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                val isNeshan = selectedProvider == RoutingProvider.NESHAN
                                 Button(
-                                    onClick = {
-                                        viewModel.calculateRouteWithProvider(RoutingProvider.OSRM)
-                                        viewModel.startNavigation()
-                                    },
+                                    onClick = { viewModel.startNavigation() },
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
-                                        contentColor = if (isOsrmActive) Color.White else MaterialTheme.colorScheme.onSurface
+                                        containerColor = if (isNeshan) neshanGreen else CaravanBlue,
+                                        contentColor = Color.White
                                     ),
-                                    border = if (isOsrmActive) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("btn_regular_navigation")
+                                        .fillMaxWidth()
+                                        .testTag("btn_start_navigation")
                                 ) {
-                                    if (isCalculating && isOsrmActive) {
-                                        CircularProgressIndicator(
-                                            strokeWidth = 2.dp,
-                                            color = if (isOsrmActive) Color.White else CaravanBlue,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    } else {
-                                        Icon(
-                                            Icons.Default.Navigation,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Regular Nav",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
+                                    Icon(
+                                        Icons.Default.DirectionsCar,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
                                     )
-                                }
-
-                                Button(
-                                    onClick = {
-                                        viewModel.calculateRouteWithProvider(RoutingProvider.NESHAN)
-                                        viewModel.startNavigation()
-                                    },
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.surfaceVariant,
-                                        contentColor = if (isNeshanActive) Color.White else MaterialTheme.colorScheme.onSurface
-                                    ),
-                                    border = if (isNeshanActive) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("btn_neshan_navigation")
-                                ) {
-                                    if (isCalculating && isNeshanActive) {
-                                        CircularProgressIndicator(
-                                            strokeWidth = 2.dp,
-                                            color = if (isNeshanActive) Color.White else neshanGreen,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    } else {
-                                        Icon(
-                                            Icons.Default.Traffic,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Neshan Nav",
-                                        fontSize = 12.sp,
+                                        text = if (isNeshan) {
+                                            "Start Neshan Navigation"
+                                        } else {
+                                            "Start Regular Navigation"
+                                        },
+                                        fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         maxLines = 1
                                     )
@@ -385,9 +480,10 @@ fun TripScreen(
             }
         }
 
-        // 3. Right-Side Message Previews Stack (preview of chat messages aligned to the right side of the screen)
+        // 3. Right-Side Message Previews + live PTT speaker chip (stays clear of drive panel)
         RightSideMessagePreviews(
             previews = tripState.visiblePreviews,
+            activeSpeakerName = tripState.activeSpeakerName,
             onOpenChat = { showChatSheet = true },
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -458,6 +554,19 @@ fun TripScreen(
 
                     Spacer(modifier = Modifier.width(10.dp))
 
+                    // Record → send voice note (hold or tap-to-latch like PTT)
+                    VoiceNoteButton(
+                        isRecording = tripState.voiceNoteRecording,
+                        audioAmplitude = tripState.audioAmplitude,
+                        enabled = tripState.pttState != PttState.TRANSMITTING &&
+                            tripState.pttState != PttState.REQUESTING,
+                        onToggle = { viewModel.toggleVoiceNote() },
+                        onStart = { viewModel.startVoiceNote() },
+                        onRelease = { viewModel.releaseVoiceNote() }
+                    )
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
                     // Chat FAB restored to its exact previous position beside the PTT button!
                     ChatFab(
                         hasUnread = tripState.chatMessages.isNotEmpty(),
@@ -471,13 +580,17 @@ fun TripScreen(
         // 4. Modal Sheets and Dialogs
         if (showFleetSheet) {
             FleetBottomSheet(
-                members = tripState.members,
+                members = tripState.members.filter { it.id != userProfile.clientId },
                 userLocation = currentLocation,
                 sharedRoutes = tripState.sharedRoutes,
+                marks = tripState.marks,
                 onDismiss = { showFleetSheet = false },
                 onSelectMember = { /* center */ },
                 onFollowMemberRoute = { memberId ->
                     viewModel.followSharedRoute(memberId)
+                },
+                onNavigateToMemberMark = { mark ->
+                    viewModel.navigateToMemberMark(mark)
                 }
             )
         }
@@ -497,7 +610,6 @@ fun TripScreen(
                 onDismiss = { showDestinationDialog = false },
                 onSetDestination = { lat, lng, label ->
                     viewModel.setDestination(lat, lng, label)
-                    viewModel.startNavigation()
                 }
             )
         }
@@ -516,7 +628,7 @@ fun TripScreen(
                 },
                 text = {
                     Text(
-                        "You will stop sharing your live location and disconnect from this trip.",
+                        "You disconnect from this trip, but it stays in Your Convoys until you delete it.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
@@ -537,6 +649,15 @@ fun TripScreen(
                         Text("Stay", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+            )
+        }
+
+        if (showInviteShare) {
+            InviteShareDialog(
+                tripName = tripState.tripName,
+                tripId = tripState.tripId,
+                inviteCode = tripState.inviteCode,
+                onDismiss = { showInviteShare = false }
             )
         }
     }

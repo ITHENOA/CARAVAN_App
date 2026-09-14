@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,13 +29,15 @@ import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.CaravanEmerald
 import com.example.ui.viewmodel.ChatPreviewItem
 
 @Composable
 fun RightSideMessagePreviews(
     previews: List<ChatPreviewItem>,
     onOpenChat: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    activeSpeakerName: String? = null,
 ) {
     Column(
         modifier = modifier
@@ -43,6 +46,14 @@ fun RightSideMessagePreviews(
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        AnimatedVisibility(
+            visible = activeSpeakerName != null,
+            enter = fadeIn(animationSpec = tween(200)) + expandVertically(),
+            exit = fadeOut(animationSpec = tween(200)) + shrinkVertically()
+        ) {
+            ActiveSpeakerPreviewChip(speakerName = activeSpeakerName.orEmpty())
+        }
+
         previews.forEach { preview ->
             key(preview.id) {
                 AnimatedVisibility(
@@ -62,6 +73,41 @@ fun RightSideMessagePreviews(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ActiveSpeakerPreviewChip(
+    speakerName: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .shadow(6.dp, RoundedCornerShape(16.dp))
+            .testTag("active_speaker_preview"),
+        color = CaravanEmerald.copy(alpha = 0.92f),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = "Active Speaker",
+                tint = Color.White,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "$speakerName is talking...",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

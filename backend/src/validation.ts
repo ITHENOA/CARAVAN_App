@@ -82,6 +82,8 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
       }
       const inviteCode = requireString(obj, "inviteCode").slice(0, 32);
       const carName = sanitizeName(obj.carName, MAX_CAR_NAME) || undefined;
+      const memberKind =
+        obj.memberKind === "person" ? ("person" as const) : ("vehicle" as const);
       const avatarColor =
         typeof obj.avatarColor === "string"
           ? obj.avatarColor.slice(0, 16)
@@ -94,7 +96,8 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
         timestamp,
         clientId,
         displayName,
-        carName,
+        carName: memberKind === "person" ? undefined : carName,
+        memberKind,
         avatarColor,
         inviteCode,
         leaderToken,
@@ -146,6 +149,10 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
       }
       const leaderToken = requireString(obj, "leaderToken");
       const label = sanitizeName(obj.label, MAX_LABEL) || undefined;
+      const ifUpdatedAt =
+        typeof obj.ifUpdatedAt === "number" && Number.isFinite(obj.ifUpdatedAt)
+          ? obj.ifUpdatedAt
+          : undefined;
       return {
         type: "destination_update",
         version: PROTOCOL_VERSION,
@@ -154,6 +161,21 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
         longitude,
         label,
         leaderToken,
+        ifUpdatedAt,
+      };
+    }
+    case "destination_clear": {
+      const leaderToken = requireString(obj, "leaderToken");
+      const ifUpdatedAt =
+        typeof obj.ifUpdatedAt === "number" && Number.isFinite(obj.ifUpdatedAt)
+          ? obj.ifUpdatedAt
+          : undefined;
+      return {
+        type: "destination_clear",
+        version: PROTOCOL_VERSION,
+        timestamp,
+        leaderToken,
+        ifUpdatedAt,
       };
     }
     case "map_mark": {

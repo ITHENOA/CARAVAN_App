@@ -1,13 +1,18 @@
 package com.example.data.network
 
 import com.example.data.model.LatLngPoint
+import com.example.data.model.RouteSegment
+import com.example.util.ConvoyUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 data class CreateTripResult(
@@ -23,21 +28,60 @@ data class CreateTripResult(
 data class RouteResult(
     val points: List<LatLngPoint>,
     val distanceMeters: Double,
-    val durationSeconds: Double
+    val durationSeconds: Double,
+    /** Per-step traffic colors from Neshan; empty for solid user-colored OSRM routes. */
+    val segments: List<com.example.data.model.RouteSegment> = emptyList()
 )
 
 class CaravanApiClient(
     private var baseUrl: String = "https://caravan-backend.ithenoa.workers.dev"
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+    private var proxy: Proxy? = null
+    private var dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
+    private var client = buildClient()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     fun updateBaseUrl(newBaseUrl: String) {
         baseUrl = newBaseUrl.trimEnd('/')
+    }
+
+    fun updateDns(dns: okhttp3.Dns) {
+        this.dns = dns
+        client = buildClient()
+    }
+
+    /**
+     * @param enabled custom proxy; when false, OkHttp uses the JVM/system [java.net.ProxySelector].
+     * Uses [InetSocketAddress.createUnresolved] so host lookup never runs on the UI thread.
+     */
+    fun updateProxy(
+        enabled: Boolean,
+        host: String,
+        port: Int,
+        type: Proxy.Type = Proxy.Type.HTTP
+    ) {
+        try {
+            proxy = if (enabled && host.isNotBlank() && port in 1..65535) {
+                Proxy(type, InetSocketAddress.createUnresolved(host.trim(), port))
+            } else {
+                null
+            }
+            client = buildClient()
+        } catch (e: Exception) {
+            Log.e("CaravanApi", "updateProxy failed; falling back to system proxy", e)
+            proxy = null
+            client = buildClient()
+        }
+    }
+
+    private fun buildClient(): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .dns(dns)
+        if (proxy != null) builder.proxy(proxy)
+        return builder.build()
     }
 
     suspend fun createTrip(
@@ -141,6 +185,7 @@ class CaravanApiClient(
                         var totalDist = 0.0
                         var totalDur = 0.0
                         val allPoints = mutableListOf<LatLngPoint>()
+                        val builtSegments = mutableListOf<RouteSegment>()
 
                         if (legs != null && legs.length() > 0) {
                             for (l in 0 until legs.length()) {
@@ -155,9 +200,41 @@ class CaravanApiClient(
                                     for (s in 0 until steps.length()) {
                                         val step = steps.getJSONObject(s)
                                         val poly = step.optString("polyline", "")
-                                        if (poly.isNotEmpty()) {
-                                            val decoded = decodePolyline(poly)
+                                        if (poly.isEmpty()) continue
+                                        val decoded = decodePolyline(poly)
+                                        if (decoded.size < 2) continue
+
+                                        val stepDist = step.optJSONObject("distance")?.optDouble("value", 0.0) ?: 0.0
+                                        val stepDur = step.optJSONObject("duration")?.optDouble("value", 0.0) ?: 0.0
+                                        val speedMps = if (stepDur > 0 && stepDist > 0) stepDist / stepDur else Double.NaN
+                                        // Neshan has no congestion labels — estimate traffic tint from implied speed
+                                        val color = ConvoyUtils.trafficColorHex(
+                                            if (speedMps.isNaN()) null else speedMps
+                                        )
+
+                                        if (builtSegments.isNotEmpty() &&
+                                            builtSegments.last().colorHex.equals(color, ignoreCase = true)
+                                        ) {
+                                            val merged = builtSegments.last().points.toMutableList()
+                                            val start = decoded.first()
+                                            val last = merged.last()
+                                            val skipFirst =
+                                                last.latitude == start.latitude && last.longitude == start.longitude
+                                            merged.addAll(if (skipFirst) decoded.drop(1) else decoded)
+                                            builtSegments[builtSegments.lastIndex] =
+                                                RouteSegment(points = merged, colorHex = color)
+                                        } else {
+                                            builtSegments.add(RouteSegment(points = decoded, colorHex = color))
+                                        }
+
+                                        if (allPoints.isEmpty()) {
                                             allPoints.addAll(decoded)
+                                        } else {
+                                            val start = decoded.first()
+                                            val last = allPoints.last()
+                                            val skipFirst =
+                                                last.latitude == start.latitude && last.longitude == start.longitude
+                                            allPoints.addAll(if (skipFirst) decoded.drop(1) else decoded)
                                         }
                                     }
                                 }
@@ -165,7 +242,12 @@ class CaravanApiClient(
                         }
 
                         if (allPoints.isNotEmpty()) {
-                            return@withContext RouteResult(allPoints, totalDist, totalDur)
+                            return@withContext RouteResult(
+                                points = allPoints,
+                                distanceMeters = totalDist,
+                                durationSeconds = totalDur,
+                                segments = builtSegments
+                            )
                         }
                     }
                 }
@@ -173,7 +255,7 @@ class CaravanApiClient(
                 // Fallback to standard routing
             }
         }
-        // Fallback to standard OSRM routing
+        // Fallback to standard OSRM routing (no traffic segments)
         calculateRoute(startLat, startLng, endLat, endLng)
     }
 

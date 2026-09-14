@@ -13,6 +13,7 @@ object CaravanProtocol {
         displayName: String,
         inviteCode: String,
         carName: String? = null,
+        memberKind: MemberKind = MemberKind.VEHICLE,
         avatarColor: String? = null,
         leaderToken: String? = null
     ): String {
@@ -23,7 +24,10 @@ object CaravanProtocol {
             put("clientId", clientId)
             put("displayName", displayName)
             put("inviteCode", inviteCode)
-            if (!carName.isNullOrBlank()) put("carName", carName)
+            put("memberKind", memberKind.wire)
+            if (memberKind != MemberKind.PERSON && !carName.isNullOrBlank()) {
+                put("carName", carName)
+            }
             if (!avatarColor.isNullOrBlank()) put("avatarColor", avatarColor)
             if (!leaderToken.isNullOrBlank()) put("leaderToken", leaderToken)
         }
@@ -55,7 +59,8 @@ object CaravanProtocol {
         longitude: Double,
         leaderToken: String,
         label: String? = null,
-        colorHex: String? = null
+        colorHex: String? = null,
+        ifUpdatedAt: Long? = null
     ): String {
         val json = JSONObject().apply {
             put("type", "destination_update")
@@ -66,8 +71,19 @@ object CaravanProtocol {
             put("leaderToken", leaderToken)
             if (!label.isNullOrBlank()) put("label", label)
             if (!colorHex.isNullOrBlank()) put("colorHex", colorHex)
+            if (ifUpdatedAt != null) put("ifUpdatedAt", ifUpdatedAt)
         }
         return json.toString()
+    }
+
+    fun buildDestinationClear(leaderToken: String, ifUpdatedAt: Long? = null): String {
+        return JSONObject().apply {
+            put("type", "destination_clear")
+            put("version", VERSION)
+            put("timestamp", System.currentTimeMillis())
+            put("leaderToken", leaderToken)
+            if (ifUpdatedAt != null) put("ifUpdatedAt", ifUpdatedAt)
+        }.toString()
     }
 
     fun buildMapMark(
@@ -95,22 +111,23 @@ object CaravanProtocol {
 
     fun buildRouteUpdate(
         points: List<LatLngPoint>,
-        colorHex: String
+        colorHex: String,
+        segments: List<RouteSegment> = emptyList()
     ): String {
         val maxPoints = 200
-        val sampledPoints = if (points.size <= maxPoints) {
-            points
-        } else {
-            val step = (points.size - 1).toDouble() / (maxPoints - 1)
+        fun downsample(pts: List<LatLngPoint>, max: Int): List<LatLngPoint> {
+            if (pts.size <= max) return pts
+            val step = (pts.size - 1).toDouble() / (max - 1)
             val result = mutableListOf<LatLngPoint>()
-            for (i in 0 until maxPoints - 1) {
-                val index = (i * step).toInt().coerceIn(0, points.size - 1)
-                result.add(points[index])
+            for (i in 0 until max - 1) {
+                val index = (i * step).toInt().coerceIn(0, pts.size - 1)
+                result.add(pts[index])
             }
-            result.add(points.last())
-            result
+            result.add(pts.last())
+            return result
         }
 
+        val sampledPoints = downsample(points, maxPoints)
         val pointsArr = JSONArray()
         sampledPoints.forEach { pt ->
             val ptArr = JSONArray()
@@ -118,12 +135,38 @@ object CaravanProtocol {
             ptArr.put(pt.longitude)
             pointsArr.put(ptArr)
         }
+
+        // Budget remaining points across traffic segments so peers see green/orange/red
+        val segmentsArr = JSONArray()
+        if (segments.isNotEmpty()) {
+            val segBudget = maxPoints.coerceAtLeast(segments.size * 2)
+            val perSeg = (segBudget / segments.size).coerceAtLeast(2)
+            segments.forEach { seg ->
+                if (seg.points.size < 2) return@forEach
+                val segPts = downsample(seg.points, perSeg)
+                val segPtsArr = JSONArray()
+                segPts.forEach { pt ->
+                    val ptArr = JSONArray()
+                    ptArr.put(pt.latitude)
+                    ptArr.put(pt.longitude)
+                    segPtsArr.put(ptArr)
+                }
+                segmentsArr.put(
+                    JSONObject().apply {
+                        put("colorHex", seg.colorHex)
+                        put("points", segPtsArr)
+                    }
+                )
+            }
+        }
+
         return JSONObject().apply {
             put("type", "route_update")
             put("version", VERSION)
             put("timestamp", System.currentTimeMillis())
             put("colorHex", colorHex)
             put("points", pointsArr)
+            if (segmentsArr.length() > 0) put("segments", segmentsArr)
         }.toString()
     }
 
@@ -196,6 +239,9 @@ object CaravanProtocol {
             id = id,
             displayName = json.optString("displayName", "Driver"),
             carName = if (json.has("carName")) json.optString("carName") else null,
+            memberKind = MemberKind.fromWire(
+                if (json.has("memberKind")) json.optString("memberKind") else null
+            ),
             avatarColor = if (json.has("avatarColor")) json.optString("avatarColor") else "#0EA5E9",
             latitude = if (json.has("latitude") && !json.isNull("latitude")) json.optDouble("latitude") else null,
             longitude = if (json.has("longitude") && !json.isNull("longitude")) json.optDouble("longitude") else null,
@@ -273,33 +319,52 @@ object CaravanProtocol {
         }
         val clientId = target.optString("clientId", "")
         val colorHex = target.optString("colorHex", "#2563EB")
-        val points = mutableListOf<LatLngPoint>()
-        val arr = target.optJSONArray("points")
-        if (arr != null) {
-            for (i in 0 until arr.length()) {
-                val ptArr = arr.optJSONArray(i)
-                if (ptArr != null && ptArr.length() >= 2) {
-                    val lat = ptArr.optDouble(0, Double.NaN)
-                    val lng = ptArr.optDouble(1, Double.NaN)
-                    if (!lat.isNaN() && !lng.isNaN()) {
-                        points.add(LatLngPoint(lat.coerceIn(-85.0, 85.0), lng.coerceIn(-180.0, 180.0)))
-                    }
-                } else {
-                    val ptObj = arr.optJSONObject(i)
-                    if (ptObj != null) {
-                        val lat = ptObj.optDouble("latitude", Double.NaN)
-                        val lng = ptObj.optDouble("longitude", Double.NaN)
-                        if (!lat.isNaN() && !lng.isNaN()) {
-                            points.add(LatLngPoint(lat.coerceIn(-85.0, 85.0), lng.coerceIn(-180.0, 180.0)))
-                        }
-                    }
-                }
+        val points = parsePointsArray(target.optJSONArray("points"))
+        val segments = mutableListOf<RouteSegment>()
+        val segsArr = target.optJSONArray("segments")
+        if (segsArr != null) {
+            for (i in 0 until segsArr.length()) {
+                val segObj = segsArr.optJSONObject(i) ?: continue
+                val segPts = parsePointsArray(segObj.optJSONArray("points"))
+                if (segPts.size < 2) continue
+                segments.add(
+                    RouteSegment(
+                        points = segPts,
+                        colorHex = segObj.optString("colorHex", "#10B981")
+                    )
+                )
             }
         }
         return SharedRoute(
             clientId = clientId,
             colorHex = colorHex,
-            points = points
+            points = points,
+            segments = segments
         )
+    }
+
+    private fun parsePointsArray(arr: JSONArray?): List<LatLngPoint> {
+        if (arr == null) return emptyList()
+        val points = mutableListOf<LatLngPoint>()
+        for (i in 0 until arr.length()) {
+            val ptArr = arr.optJSONArray(i)
+            if (ptArr != null && ptArr.length() >= 2) {
+                val lat = ptArr.optDouble(0, Double.NaN)
+                val lng = ptArr.optDouble(1, Double.NaN)
+                if (!lat.isNaN() && !lng.isNaN()) {
+                    points.add(LatLngPoint(lat.coerceIn(-85.0, 85.0), lng.coerceIn(-180.0, 180.0)))
+                }
+            } else {
+                val ptObj = arr.optJSONObject(i)
+                if (ptObj != null) {
+                    val lat = ptObj.optDouble("latitude", ptObj.optDouble("lat", Double.NaN))
+                    val lng = ptObj.optDouble("longitude", ptObj.optDouble("lng", Double.NaN))
+                    if (!lat.isNaN() && !lng.isNaN()) {
+                        points.add(LatLngPoint(lat.coerceIn(-85.0, 85.0), lng.coerceIn(-180.0, 180.0)))
+                    }
+                }
+            }
+        }
+        return points
     }
 }

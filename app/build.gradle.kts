@@ -78,4 +78,8 @@ dependencies {
 
     // MapLibre Native SDK for Android
     implementation("org.maplibre.gl:android-sdk:11.5.1")
+
+    // QR encode + in-app scanner (no Google Play Services — works in IR / Chinese ROMs)
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

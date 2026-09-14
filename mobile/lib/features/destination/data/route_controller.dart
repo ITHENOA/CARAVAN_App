@@ -70,6 +70,7 @@ class RouteController extends Notifier<RouteUiState> {
   final _osrm = RoutingService();
   final _neshan = NeshanRoutingService();
   final _geocoding = GeocodingService();
+  int _routeEpoch = 0;
 
   @override
   RouteUiState build() => const RouteUiState();
@@ -79,6 +80,7 @@ class RouteController extends Notifier<RouteUiState> {
     LatLng target, {
     required RoutingProvider provider,
   }) async {
+    final epoch = ++_routeEpoch;
     state = state.copyWith(
       target: target,
       phase: NavPhase.preview,
@@ -86,12 +88,17 @@ class RouteController extends Notifier<RouteUiState> {
       loadingProvider: provider,
       clearError: true,
     );
-    await _fetch(target, provider);
+    await _fetch(target, provider, epoch);
   }
 
-  Future<void> _fetch(LatLng target, RoutingProvider provider) async {
+  Future<void> _fetch(
+    LatLng target,
+    RoutingProvider provider,
+    int epoch,
+  ) async {
     final me = ref.read(locationControllerProvider);
     if (me == null) {
+      if (epoch != _routeEpoch) return;
       state = state.copyWith(
         loading: false,
         clearLoadingProvider: true,
@@ -103,6 +110,7 @@ class RouteController extends Notifier<RouteUiState> {
       final result = provider == RoutingProvider.neshan
           ? await _neshan.route(me.latLng, target)
           : await _osrm.route(me.latLng, target);
+      if (epoch != _routeEpoch) return;
       if (result == null) {
         state = state.copyWith(
           loading: false,
@@ -122,6 +130,7 @@ class RouteController extends Notifier<RouteUiState> {
       }
     } catch (e, st) {
       AppLogger.d('route failed ($provider)', e, st);
+      if (epoch != _routeEpoch) return;
       state = state.copyWith(
         loading: false,
         clearLoadingProvider: true,
@@ -229,6 +238,7 @@ class RouteController extends Notifier<RouteUiState> {
   }
 
   void stopNavigation() {
+    _routeEpoch++;
     state = state.copyWith(
       phase: NavPhase.idle,
       clearRoute: true,
@@ -238,10 +248,16 @@ class RouteController extends Notifier<RouteUiState> {
       clearLoadingProvider: true,
       loading: false,
     );
-    ref.read(tripControllerProvider.notifier).clearPublishedRoute();
+    final trip = ref.read(tripControllerProvider);
+    final tripNotifier = ref.read(tripControllerProvider.notifier);
+    tripNotifier.clearPublishedRoute();
+    if (trip.leaderToken != null && trip.destination != null) {
+      tripNotifier.clearDestination();
+    }
   }
 
   void clearPreviewKeepMark() {
+    _routeEpoch++;
     state = state.copyWith(
       phase: NavPhase.idle,
       clearRoute: true,

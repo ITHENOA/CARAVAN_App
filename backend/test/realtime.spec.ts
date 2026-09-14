@@ -222,8 +222,85 @@ describe("realtime room", () => {
     const rejoined = await waitForMessage(b2, (m) => m.type === "joined");
     expect(rejoined.destination).toBeTruthy();
 
+    // Leader clears destination for everyone
+    a.send(
+      JSON.stringify({
+        type: "destination_clear",
+        version: 1,
+        timestamp: Date.now(),
+        leaderToken: trip.leaderToken,
+      }),
+    );
+    const cleared = await waitForMessage(b2, (m) => m.type === "destination_clear");
+    expect(cleared.type).toBe("destination_clear");
+
     a.close(1000, "done");
     b2.close(1000, "done");
+  });
+
+  it("reconnect does not wipe the new session route", async () => {
+    const trip = await createTrip();
+    const a1 = await openSocket(trip.tripId);
+    a1.send(
+      JSON.stringify({
+        type: "join",
+        version: 1,
+        timestamp: Date.now(),
+        clientId: "client-a",
+        displayName: "Ali",
+        inviteCode: trip.inviteCode,
+        leaderToken: trip.leaderToken,
+      }),
+    );
+    await waitForMessage(a1, (m) => m.type === "joined");
+
+    a1.send(
+      JSON.stringify({
+        type: "route_update",
+        version: 1,
+        timestamp: Date.now(),
+        colorHex: "#111111",
+        points: [
+          [35.7, 51.4],
+          [35.71, 51.41],
+        ],
+      }),
+    );
+
+    // Allow DO to apply route before replacing the socket
+    await new Promise((r) => setTimeout(r, 50));
+
+    const a2 = await openSocket(trip.tripId);
+    a2.send(
+      JSON.stringify({
+        type: "join",
+        version: 1,
+        timestamp: Date.now(),
+        clientId: "client-a",
+        displayName: "Ali",
+        inviteCode: trip.inviteCode,
+        leaderToken: trip.leaderToken,
+      }),
+    );
+    const joined2 = await waitForMessage(a2, (m) => m.type === "joined");
+    const routes = joined2.routes as Array<{ clientId: string }>;
+    expect(routes.some((r) => r.clientId === "client-a")).toBe(true);
+
+    // Old socket close must not broadcast route_clear for the new session
+    let sawClear = false;
+    const clearWait = waitForMessage(a2, (m) => m.type === "route_clear", 500).then(
+      () => {
+        sawClear = true;
+      },
+      () => {
+        /* timeout expected */
+      },
+    );
+    a1.close(4000, "replaced");
+    await clearWait;
+    expect(sawClear).toBe(false);
+
+    a2.close(1000, "done");
   });
 
   it("isolates different trips", async () => {
@@ -282,7 +359,7 @@ describe("realtime room", () => {
     b.close();
   });
 
-  it("PTT floor control", async () => {
+  it("PTT allows concurrent speakers", async () => {
     const trip = await createTrip();
     const a = await openSocket(trip.tripId);
     const b = await openSocket(trip.tripId);
@@ -313,15 +390,65 @@ describe("realtime room", () => {
     await waitForMessage(b, (m) => m.type === "joined");
 
     a.send(JSON.stringify({ type: "ptt_request", version: 1, timestamp: Date.now() }));
-    const granted = await waitForMessage(b, (m) => m.type === "ptt_granted");
-    expect(granted.clientId).toBe("ptt-a");
+    const grantedA = await waitForMessage(b, (m) => m.type === "ptt_granted");
+    expect(grantedA.clientId).toBe("ptt-a");
 
+    // Open mic: second speaker is also granted (no exclusive floor / ptt_busy).
     b.send(JSON.stringify({ type: "ptt_request", version: 1, timestamp: Date.now() }));
-    const busy = await waitForMessage(b, (m) => m.type === "ptt_busy");
-    expect(busy.activeSpeakerId).toBe("ptt-a");
+    const grantedB = await waitForMessage(a, (m) => m.type === "ptt_granted" && m.clientId === "ptt-b");
+    expect(grantedB.clientId).toBe("ptt-b");
 
     a.send(JSON.stringify({ type: "ptt_release", version: 1, timestamp: Date.now() }));
-    await waitForMessage(b, (m) => m.type === "ptt_release");
+    await waitForMessage(b, (m) => m.type === "ptt_release" && m.clientId === "ptt-a");
+
+    a.close();
+    b.close();
+  });
+
+  it("relays audio_chunk without prior PTT grant", async () => {
+    const trip = await createTrip();
+    const a = await openSocket(trip.tripId);
+    const b = await openSocket(trip.tripId);
+
+    a.send(
+      JSON.stringify({
+        type: "join",
+        version: 1,
+        timestamp: Date.now(),
+        clientId: "aud-a",
+        displayName: "Ali",
+        inviteCode: trip.inviteCode,
+        leaderToken: trip.leaderToken,
+      }),
+    );
+    await waitForMessage(a, (m) => m.type === "joined");
+
+    b.send(
+      JSON.stringify({
+        type: "join",
+        version: 1,
+        timestamp: Date.now(),
+        clientId: "aud-b",
+        displayName: "Sara",
+        inviteCode: trip.inviteCode,
+      }),
+    );
+    await waitForMessage(b, (m) => m.type === "joined");
+
+    const payload = Buffer.from([1, 2, 3, 4]).toString("base64");
+    a.send(
+      JSON.stringify({
+        type: "audio_chunk",
+        version: 1,
+        timestamp: Date.now(),
+        data: payload,
+        sampleRate: 16000,
+        seq: 1,
+      }),
+    );
+    const chunk = await waitForMessage(b, (m) => m.type === "audio_chunk");
+    expect(chunk.clientId).toBe("aud-a");
+    expect(chunk.data).toBe(payload);
 
     a.close();
     b.close();

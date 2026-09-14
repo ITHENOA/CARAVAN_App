@@ -29,11 +29,20 @@ data class LatLngPoint(
     val longitude: Double
 )
 
+/** One colored stretch of a route (Neshan traffic tint: green / orange / red). */
+@Serializable
+data class RouteSegment(
+    val points: List<LatLngPoint> = emptyList(),
+    val colorHex: String = "#10B981"
+)
+
 @Serializable
 data class SharedRoute(
     val clientId: String,
     val colorHex: String = "#2563EB",
-    val points: List<LatLngPoint> = emptyList()
+    val points: List<LatLngPoint> = emptyList(),
+    /** When non-empty (Neshan), peers render traffic colors instead of [colorHex]. */
+    val segments: List<RouteSegment> = emptyList()
 )
 
 @Serializable
@@ -51,8 +60,11 @@ data class UserProfile(
     val clientId: String = java.util.UUID.randomUUID().toString(),
     val displayName: String = "Driver",
     val carName: String = "SUV",
+    val memberKind: MemberKind = MemberKind.VEHICLE,
     val avatarColor: String = "#0EA5E9"
-)
+) {
+    val isPerson: Boolean get() = memberKind == MemberKind.PERSON
+}
 
 @Serializable
 data class SavedTrip(

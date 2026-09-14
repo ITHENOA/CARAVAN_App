@@ -117,8 +117,15 @@ echo.
 echo [2/3] adb install -r
 "%ADB%" -s %DEVICE% install -r "%APK%"
 if errorlevel 1 (
-  echo ERROR: Install failed.
-  goto :fail
+  echo Signature mismatch or install blocked. Uninstalling %PACKAGE% then retrying...
+  "%ADB%" -s %DEVICE% uninstall %PACKAGE% >nul 2>&1
+  "%ADB%" -s %DEVICE% install -r "%APK%"
+  if errorlevel 1 (
+    echo ERROR: Install failed.
+    echo If you see INSTALL_FAILED_USER_RESTRICTED, enable "Install via USB"
+    echo in Developer options and tap Allow on the phone prompt, then re-run.
+    goto :fail
+  )
 )
 
 echo.

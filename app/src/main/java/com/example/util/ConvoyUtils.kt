@@ -22,16 +22,45 @@ object ConvoyUtils {
         "#10B981"  // Emerald Green
     )
 
-    fun colorForClientId(clientId: String, preferred: String? = null): String {
-        if (!preferred.isNullOrBlank() && preferred.startsWith("#")) {
-            return preferred
+    fun normalizeHex(raw: String?): String {
+        var h = (raw ?: "").trim()
+        if (h.isEmpty()) return ""
+        if (!h.startsWith("#")) h = "#$h"
+        if (h.length == 4) {
+            // #RGB → #RRGGBB
+            h = "#${h[1]}${h[1]}${h[2]}${h[2]}${h[3]}${h[3]}"
         }
-        val hash = abs(clientId.hashCode())
-        return palette[hash % palette.size]
+        return h.uppercase()
+    }
+
+    /**
+     * Picks a palette color for [clientId], preferring [preferred] when free.
+     * Guarantees uniqueness against [taken] (normalized hex set).
+     */
+    fun distinctColorFor(
+        clientId: String,
+        preferred: String? = null,
+        taken: Set<String> = emptySet()
+    ): String {
+        val takenNorm = taken.map { normalizeHex(it) }.filter { it.isNotEmpty() }.toSet()
+        val pref = normalizeHex(preferred)
+        if (pref.length == 7 && !takenNorm.contains(pref)) return pref
+
+        val ordered = palette.sortedBy { abs(it.hashCode() xor clientId.hashCode()) }
+        for (c in ordered) {
+            val n = normalizeHex(c)
+            if (!takenNorm.contains(n)) return n
+        }
+        return normalizeHex(palette[abs(clientId.hashCode()) % palette.size])
+    }
+
+    fun colorForClientId(clientId: String, preferred: String? = null): String {
+        return distinctColorFor(clientId, preferred)
     }
 
     /**
      * Guarantees every person in the convoy has a strictly unique, distinct color.
+     * Self is assigned first; self row in [members] keeps the same resolved color.
      */
     fun resolveDistinctColors(
         selfId: String,
@@ -39,39 +68,19 @@ object ConvoyUtils {
         members: List<TripMember>
     ): Pair<String, List<TripMember>> {
         val takenColors = mutableSetOf<String>()
-        val normalize = { c: String? ->
-            val str = (c ?: "").trim().uppercase()
-            if (str.isEmpty()) "" else if (str.startsWith("#")) str else "#$str"
-        }
 
-        // 1. Assign unique color for self
-        val prefNorm = normalize(selfPreferredColor)
-        val selfColor = if (prefNorm.length == 7 && !takenColors.contains(prefNorm)) {
-            prefNorm
-        } else {
-            palette.firstOrNull { !takenColors.contains(it) } ?: palette[0]
-        }
+        val selfColor = distinctColorFor(selfId, selfPreferredColor, takenColors)
         takenColors.add(selfColor)
 
-        // 2. Assign unique color for each member
         val updatedMembers = members.map { member ->
-            val mPref = normalize(member.avatarColor)
-            val assignedColor = if (mPref.length == 7 && !takenColors.contains(mPref)) {
-                mPref
+            if (member.id == selfId) {
+                if (normalizeHex(member.avatarColor) == selfColor) member
+                else member.copy(avatarColor = selfColor)
             } else {
-                val freeColor = palette.firstOrNull { !takenColors.contains(it) }
-                if (freeColor != null) {
-                    freeColor
-                } else {
-                    val hash = abs(member.id.hashCode())
-                    palette[hash % palette.size]
-                }
-            }
-            takenColors.add(assignedColor)
-            if (member.avatarColor != assignedColor) {
-                member.copy(avatarColor = assignedColor)
-            } else {
-                member
+                val assigned = distinctColorFor(member.id, member.avatarColor, takenColors)
+                takenColors.add(assigned)
+                if (normalizeHex(member.avatarColor) == assigned) member
+                else member.copy(avatarColor = assigned)
             }
         }
 
@@ -144,6 +153,20 @@ object ConvoyUtils {
         val hours = totalMinutes / 60
         val mins = totalMinutes % 60
         return if (mins == 0) "${hours}h" else "${hours}h ${mins}m"
+    }
+
+    /**
+     * Traffic tint for Neshan steps inferred from implied speed
+     * (Neshan does not return congestion labels): red / orange / green.
+     */
+    fun trafficColorHex(metersPerSec: Double?): String {
+        if (metersPerSec == null || metersPerSec.isNaN()) return "#10B981"
+        val kmh = metersPerSec * 3.6
+        return when {
+            kmh < 12 -> "#EF4444" // Congested
+            kmh < 35 -> "#F59E0B" // Moderate
+            else -> "#10B981"     // Free flowing
+        }
     }
 
     fun speedColorHex(metersPerSec: Double?): String {
@@ -226,5 +249,139 @@ object ConvoyUtils {
             }
         }
         return minDistance
+    }
+
+    /**
+     * Drop the portion of [points] already passed. Returns remaining geometry
+     * (from the projection on the route) and the locked vertex index so progress
+     * only moves forward (OSRM solid route).
+     */
+    fun remainingPolyline(
+        points: List<com.example.data.model.LatLngPoint>,
+        lat: Double,
+        lng: Double,
+        minVertexIndex: Int = 0
+    ): Pair<List<com.example.data.model.LatLngPoint>, Int> {
+        if (points.size < 2) return points to 0
+
+        val hit = nearestOnPolyline(points, lat, lng, minVertexIndex) ?: return points to minVertexIndex
+        val remaining = ArrayList<com.example.data.model.LatLngPoint>(points.size - hit.vertexIndex)
+        remaining.add(hit.projected)
+        for (i in hit.vertexIndex + 1 until points.size) {
+            val p = points[i]
+            val last = remaining.last()
+            if (distanceMeters(last.latitude, last.longitude, p.latitude, p.longitude) > 0.5) {
+                remaining.add(p)
+            }
+        }
+        return remaining to hit.vertexIndex
+    }
+
+    /**
+     * Same as [remainingPolyline] but for Neshan traffic-colored stretches.
+     * Progress is (segmentIndex, vertexIndex) and only advances forward.
+     */
+    fun remainingSegments(
+        segments: List<com.example.data.model.RouteSegment>,
+        lat: Double,
+        lng: Double,
+        minSegIndex: Int = 0,
+        minVertexIndex: Int = 0
+    ): Triple<List<com.example.data.model.RouteSegment>, Int, Int> {
+        if (segments.isEmpty()) return Triple(emptyList(), 0, 0)
+
+        var bestDist = Double.MAX_VALUE
+        var bestSeg = minSegIndex.coerceIn(0, segments.lastIndex)
+        var bestVertex = 0
+        var bestProj = com.example.data.model.LatLngPoint(lat, lng)
+
+        val startSeg = minSegIndex.coerceIn(0, segments.lastIndex)
+        for (s in startSeg until segments.size) {
+            val pts = segments[s].points
+            if (pts.size < 2) continue
+            val fromVertex = if (s == startSeg) minVertexIndex.coerceIn(0, pts.lastIndex - 1) else 0
+            val hit = nearestOnPolyline(pts, lat, lng, fromVertex) ?: continue
+            if (hit.distanceMeters < bestDist) {
+                bestDist = hit.distanceMeters
+                bestSeg = s
+                bestVertex = hit.vertexIndex
+                bestProj = hit.projected
+            }
+        }
+
+        val out = ArrayList<com.example.data.model.RouteSegment>(segments.size - bestSeg)
+        val firstPts = segments[bestSeg].points
+        val firstRemaining = ArrayList<com.example.data.model.LatLngPoint>()
+        firstRemaining.add(bestProj)
+        for (i in bestVertex + 1 until firstPts.size) {
+            val p = firstPts[i]
+            val last = firstRemaining.last()
+            if (distanceMeters(last.latitude, last.longitude, p.latitude, p.longitude) > 0.5) {
+                firstRemaining.add(p)
+            }
+        }
+        if (firstRemaining.size >= 2) {
+            out.add(segments[bestSeg].copy(points = firstRemaining))
+        }
+        for (s in bestSeg + 1 until segments.size) {
+            val pts = segments[s].points
+            if (pts.size >= 2) out.add(segments[s])
+        }
+        return Triple(out, bestSeg, bestVertex)
+    }
+
+    private data class PolylineHit(
+        val vertexIndex: Int,
+        val projected: com.example.data.model.LatLngPoint,
+        val distanceMeters: Double
+    )
+
+    /** Closest projection on [points], searching only from [minVertexIndex] forward. */
+    private fun nearestOnPolyline(
+        points: List<com.example.data.model.LatLngPoint>,
+        lat: Double,
+        lng: Double,
+        minVertexIndex: Int
+    ): PolylineHit? {
+        if (points.size < 2) return null
+
+        val latRad = Math.toRadians(lat)
+        val cosLat = cos(latRad)
+        val metersPerDegLat = 111132.95
+        val metersPerDegLng = 111412.84 * cosLat
+
+        var bestDist = Double.MAX_VALUE
+        var bestIdx = minVertexIndex.coerceIn(0, points.lastIndex - 1)
+        var bestT = 0.0
+
+        val from = minVertexIndex.coerceIn(0, points.lastIndex - 1)
+        for (i in from until points.size - 1) {
+            val p1 = points[i]
+            val p2 = points[i + 1]
+            val x1 = (p1.longitude - lng) * metersPerDegLng
+            val y1 = (p1.latitude - lat) * metersPerDegLat
+            val x2 = (p2.longitude - lng) * metersPerDegLng
+            val y2 = (p2.latitude - lat) * metersPerDegLat
+            val dx = x2 - x1
+            val dy = y2 - y1
+            val lenSq = dx * dx + dy * dy
+            val t = if (lenSq == 0.0) 0.0 else (-(x1 * dx + y1 * dy) / lenSq).coerceIn(0.0, 1.0)
+            val projX = x1 + t * dx
+            val projY = y1 + t * dy
+            val dist = sqrt(projX * projX + projY * projY)
+            if (dist < bestDist) {
+                bestDist = dist
+                bestIdx = i
+                bestT = t
+            }
+        }
+
+        val a = points[bestIdx]
+        val b = points[bestIdx + 1]
+        val projected = com.example.data.model.LatLngPoint(
+            latitude = a.latitude + (b.latitude - a.latitude) * bestT,
+            longitude = a.longitude + (b.longitude - a.longitude) * bestT
+        )
+        return PolylineHit(bestIdx, projected, bestDist)
     }
 }

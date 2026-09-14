@@ -26,16 +26,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.location.DeviceLocation
+import com.example.data.model.MapMark
 import com.example.data.model.MemberConnectionStatus
 import com.example.data.model.TripMember
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.CaravanConnectionStatus
 import com.example.util.ConvoyUtils
+import kotlinx.coroutines.delay
 
 @Composable
 fun ConvoyTopBar(
     tripName: String,
     inviteCode: String,
+    tripId: String = "",
     connectionStatus: CaravanConnectionStatus,
     memberCount: Int,
     isDarkMode: Boolean = false,
@@ -44,6 +47,7 @@ fun ConvoyTopBar(
     onToggleFleetList: () -> Unit,
     onOpenSettings: () -> Unit,
     onLeaveTrip: () -> Unit,
+    onShareInvite: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -74,33 +78,45 @@ fun ConvoyTopBar(
                         maxLines = 1
                     )
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clickable {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("Invite Code", inviteCode))
-                                Toast.makeText(context, "Code $inviteCode copied!", Toast.LENGTH_SHORT).show()
-                            }
-                            .testTag("copy_invite_code_button")
-                    ) {
-                        Text(
-                            text = "Code: ",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = inviteCode,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = CaravanBlue
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    cm.setPrimaryClip(ClipData.newPlainText("Invite Code", inviteCode))
+                                    Toast.makeText(context, "Code $inviteCode copied!", Toast.LENGTH_SHORT).show()
+                                }
+                                .testTag("copy_invite_code_button")
+                        ) {
+                            Text(
+                                text = "Code: ",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = inviteCode,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = CaravanBlue
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Copy code",
+                                tint = CaravanBlue,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                         Icon(
-                            Icons.Default.ContentCopy,
-                            contentDescription = "Copy code",
+                            Icons.Default.QrCode2,
+                            contentDescription = "Share QR",
                             tint = CaravanBlue,
-                            modifier = Modifier.size(13.dp)
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clickable(onClick = onShareInvite)
+                                .testTag("share_invite_qr_button")
                         )
                     }
                 }
@@ -196,8 +212,8 @@ fun ConvoyTopBar(
                             .height(30.dp)
                             .testTag("toggle_fleet_button"),
                         colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = NightSlateBorder,
-                            contentColor = TextPrimary
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         )
                     ) {
                         Icon(
@@ -239,14 +255,24 @@ fun FleetBottomSheet(
     members: List<TripMember>,
     userLocation: DeviceLocation,
     sharedRoutes: Map<String, com.example.data.model.SharedRoute> = emptyMap(),
+    marks: Map<String, MapMark> = emptyMap(),
     onDismiss: () -> Unit,
     onSelectMember: (TripMember) -> Unit,
-    onFollowMemberRoute: (String) -> Unit = {}
+    onFollowMemberRoute: (String) -> Unit = {},
+    onNavigateToMemberMark: (MapMark) -> Unit = {}
 ) {
+    var presenceTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(15_000L)
+            presenceTick++
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = NightSlateSurface,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = NightSlateBorder) }
+        containerColor = MaterialTheme.colorScheme.surface,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.outline) }
     ) {
         Column(
             modifier = Modifier
@@ -259,10 +285,10 @@ fun FleetBottomSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Convoy Fleet (${members.size} vehicles)",
+                    text = "Convoy (${members.size} members)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
 
@@ -274,14 +300,20 @@ fun FleetBottomSheet(
                     .heightIn(max = 380.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(members, key = { it.id }) { member ->
+                items(members, key = { "${it.id}-$presenceTick" }) { member ->
                     val hasSharedRoute = sharedRoutes[member.id]?.points?.isNotEmpty() == true
+                    val memberMark = marks[member.id]
                     FleetMemberRow(
                         member = member,
                         userLocation = userLocation,
                         hasSharedRoute = hasSharedRoute,
+                        hasMark = memberMark != null,
                         onFollowRoute = {
                             onFollowMemberRoute(member.id)
+                            onDismiss()
+                        },
+                        onNavigateToMark = {
+                            memberMark?.let(onNavigateToMemberMark)
                             onDismiss()
                         },
                         onClick = {
@@ -301,7 +333,9 @@ fun FleetMemberRow(
     member: TripMember,
     userLocation: DeviceLocation,
     hasSharedRoute: Boolean = false,
+    hasMark: Boolean = false,
     onFollowRoute: () -> Unit = {},
+    onNavigateToMark: () -> Unit = {},
     onClick: () -> Unit
 ) {
     val mColor = try {
@@ -323,7 +357,7 @@ fun FleetMemberRow(
     }
 
     Surface(
-        color = NightSlateCard,
+        color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -343,7 +377,7 @@ fun FleetMemberRow(
                     .background(mColor.copy(alpha = 0.2f))
             ) {
                 Icon(
-                    Icons.Default.DirectionsCar,
+                    if (member.isPerson) Icons.Default.Person else Icons.Default.DirectionsCar,
                     contentDescription = null,
                     tint = mColor,
                     modifier = Modifier.size(24.dp)
@@ -358,7 +392,7 @@ fun FleetMemberRow(
                         text = member.displayName,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     if (member.isLeader) {
                         Spacer(modifier = Modifier.width(6.dp))
@@ -377,31 +411,70 @@ fun FleetMemberRow(
                     }
                 }
 
+                val timeAgo = ConvoyUtils.formatTimeAgo(member.lastLocationAt ?: member.lastSeenAt)
+                val statusLine = when {
+                    member.connectionStatus == MemberConnectionStatus.OFFLINE && timeAgo != null ->
+                        "Offline · $timeAgo"
+                    member.connectionStatus == MemberConnectionStatus.OFFLINE ->
+                        "Offline · last known location"
+                    member.connectionStatus == MemberConnectionStatus.RECONNECTING && timeAgo != null ->
+                        "GPS weak · $timeAgo"
+                    timeAgo != null ->
+                        "Last seen $timeAgo"
+                    member.isPerson -> "On foot"
+                    !member.carName.isNullOrBlank() -> member.carName
+                    else -> "Vehicle"
+                }
                 Text(
-                    text = member.carName ?: "Vehicle",
+                    text = statusLine,
                     fontSize = 12.sp,
-                    color = TextSecondary
+                    color = when (member.connectionStatus) {
+                        MemberConnectionStatus.OFFLINE -> CaravanCrimson
+                        MemberConnectionStatus.RECONNECTING -> CaravanAmber
+                        else -> if (timeAgo != null) CaravanAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
 
-            // Follow Path Action Button if member shared a route
-            if (hasSharedRoute) {
-                FilledTonalButton(
-                    onClick = onFollowRoute,
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = mColor.copy(alpha = 0.18f),
-                        contentColor = mColor
-                    ),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier
-                        .height(32.dp)
-                        .padding(end = 8.dp)
-                        .testTag("follow_route_button_${member.id}")
-                ) {
-                    Icon(Icons.Default.Navigation, contentDescription = "Follow Path", modifier = Modifier.size(13.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Follow", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            // Route follow takes priority; otherwise offer nav to their mark only
+            when {
+                hasSharedRoute -> {
+                    FilledTonalButton(
+                        onClick = onFollowRoute,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = mColor.copy(alpha = 0.18f),
+                            contentColor = mColor
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .height(32.dp)
+                            .padding(end = 8.dp)
+                            .testTag("follow_route_button_${member.id}")
+                    ) {
+                        Icon(Icons.Default.Navigation, contentDescription = "Follow Path", modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Follow", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                hasMark -> {
+                    FilledTonalButton(
+                        onClick = onNavigateToMark,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = mColor.copy(alpha = 0.18f),
+                            contentColor = mColor
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .height(32.dp)
+                            .padding(end = 8.dp)
+                            .testTag("nav_to_mark_button_${member.id}")
+                    ) {
+                        Icon(Icons.Default.Place, contentDescription = "Go to Mark", modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Go to Mark", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
@@ -416,7 +489,7 @@ fun FleetMemberRow(
                 Text(
                     text = distanceText,
                     fontSize = 11.sp,
-                    color = TextMuted
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

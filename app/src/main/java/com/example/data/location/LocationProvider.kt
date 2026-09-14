@@ -11,6 +11,7 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
@@ -131,6 +132,8 @@ class LocationProvider(private val context: Context) {
 
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            if (!shouldAcceptLocation(location)) return
+
             val hasGpsBearing = location.hasBearing() && location.hasSpeed() && location.speed > 3.0f
             val heading = if (hasGpsBearing) {
                 lastHeading = location.bearing.toDouble()
@@ -145,7 +148,7 @@ class LocationProvider(private val context: Context) {
                 speed = if (location.hasSpeed()) location.speed.toDouble() else 0.0,
                 heading = heading,
                 accuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else 5.0,
-                timestamp = location.time,
+                timestamp = if (location.time > 0L) location.time else System.currentTimeMillis(),
                 isRealGps = true
             )
         }
@@ -153,9 +156,49 @@ class LocationProvider(private val context: Context) {
         @Deprecated("Deprecated in Java")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         override fun onProviderEnabled(provider: String) {
-            startLocationUpdates()
+            // Resume listening without reseeding last-known (avoids snap-back)
+            startLocationUpdates(force = true, seedFromLastKnown = false)
         }
         override fun onProviderDisabled(provider: String) {}
+    }
+
+    /**
+     * Reject stale / much-worse network fixes that would snap the puck back
+     * after a good GPS update (classic Android dual-provider flicker).
+     */
+    private fun shouldAcceptLocation(incoming: Location): Boolean {
+        val current = _currentLocation.value
+        if (!current.isRealGps || (current.latitude == 0.0 && current.longitude == 0.0)) {
+            return true
+        }
+
+        val incomingTime = if (incoming.time > 0L) incoming.time else System.currentTimeMillis()
+        // Older than what we already have → ignore (network often replays old cells)
+        if (incomingTime + 2_000L < current.timestamp) {
+            return false
+        }
+
+        val currentAgeMs = System.currentTimeMillis() - current.timestamp
+        val incomingAccuracy = if (incoming.hasAccuracy()) incoming.accuracy.toDouble() else 100.0
+        val currentAccuracy = if (current.accuracy > 0.0) current.accuracy else 50.0
+
+        // Recent accurate fix: reject a much worse one
+        if (currentAgeMs < 15_000L && incomingAccuracy > maxOf(currentAccuracy * 2.5, currentAccuracy + 40.0)) {
+            return false
+        }
+
+        // Large jump with poor accuracy shortly after a good fix → ignore
+        if (currentAgeMs < 10_000L && currentAccuracy <= 40.0 && incomingAccuracy >= 80.0) {
+            val results = FloatArray(1)
+            Location.distanceBetween(
+                current.latitude, current.longitude,
+                incoming.latitude, incoming.longitude,
+                results
+            )
+            if (results[0] > 80f) return false
+        }
+
+        return true
     }
 
     fun setManualLocation(latitude: Double, longitude: Double, heading: Double = 0.0) {
@@ -169,72 +212,134 @@ class LocationProvider(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun startLocationUpdates() {
+    fun startLocationUpdates(force: Boolean = false, seedFromLastKnown: Boolean = true) {
         startSensorUpdates()
-        if (locationManager == null) return
+        val lm = locationManager ?: return
         try {
-            // 1. Immediately fetch last known location from all available providers
-            val providers = listOf(
-                LocationManager.GPS_PROVIDER,
-                LocationManager.NETWORK_PROVIDER,
-                LocationManager.PASSIVE_PROVIDER
-            )
-            var bestLocation: Location? = null
-            for (p in providers) {
-                try {
-                    val loc = locationManager.getLastKnownLocation(p)
-                    if (loc != null) {
-                        if (bestLocation == null || loc.time > bestLocation.time) {
-                            bestLocation = loc
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-
-            bestLocation?.let { loc ->
-                _currentLocation.value = DeviceLocation(
-                    latitude = loc.latitude,
-                    longitude = loc.longitude,
-                    speed = if (loc.hasSpeed()) loc.speed.toDouble() else 0.0,
-                    heading = if (loc.hasBearing()) loc.bearing.toDouble() else _currentLocation.value.heading,
-                    accuracy = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 5.0,
-                    timestamp = loc.time,
-                    isRealGps = true
+            // 1. Seed from last-known only when we have no usable fix yet.
+            // Never overwrite a live GPS fix with a stale last-known (causes snap-back).
+            if (seedFromLastKnown && !_currentLocation.value.isRealGps) {
+                val providers = listOf(
+                    LocationManager.GPS_PROVIDER,
+                    LocationManager.NETWORK_PROVIDER,
+                    LocationManager.PASSIVE_PROVIDER
                 )
+                var bestLocation: Location? = null
+                for (p in providers) {
+                    try {
+                        val loc = lm.getLastKnownLocation(p) ?: continue
+                        bestLocation = when {
+                            bestLocation == null -> loc
+                            loc.time - bestLocation.time > 30_000L -> loc
+                            bestLocation.time - loc.time > 30_000L -> bestLocation
+                            loc.hasAccuracy() && bestLocation.hasAccuracy() &&
+                                loc.accuracy < bestLocation.accuracy -> loc
+                            else -> bestLocation
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                bestLocation?.let { loc ->
+                    if (shouldAcceptLocation(loc)) {
+                        locationListener.onLocationChanged(loc)
+                    }
+                }
             }
 
-            // 2. Request live updates from both GPS and Network providers simultaneously
+            // 2. Re-register listeners when forced or after a failed earlier start
+            if (force && isListeningGps) {
+                try {
+                    lm.removeUpdates(locationListener)
+                } catch (_: Exception) {}
+                isListeningGps = false
+            }
+
             if (!isListeningGps) {
-                if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                var registered = false
+                if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                     try {
-                        locationManager.requestLocationUpdates(
+                        lm.requestLocationUpdates(
                             LocationManager.GPS_PROVIDER,
                             1000L,
                             1f,
                             locationListener
                         )
+                        registered = true
                     } catch (e: Exception) {
                         Log.w("LocationProvider", "GPS update request failed", e)
                     }
                 }
-                if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                     try {
-                        locationManager.requestLocationUpdates(
+                        lm.requestLocationUpdates(
                             LocationManager.NETWORK_PROVIDER,
-                            1000L,
-                            1f,
+                            2000L,
+                            5f,
                             locationListener
                         )
+                        registered = true
                     } catch (e: Exception) {
                         Log.w("LocationProvider", "Network update request failed", e)
                     }
                 }
-                isListeningGps = true
+                // Only mark listening when at least one provider actually registered
+                isListeningGps = registered
+            }
+
+            if (force || !_currentLocation.value.isRealGps) {
+                requestSingleFreshFix()
             }
         } catch (e: SecurityException) {
             Log.w("LocationProvider", "Location permission not granted", e)
+            isListeningGps = false
         } catch (e: Exception) {
             Log.w("LocationProvider", "Failed to start GPS", e)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestSingleFreshFix() {
+        val lm = locationManager ?: return
+        try {
+            val apply = { loc: Location? ->
+                if (loc != null) locationListener.onLocationChanged(loc)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                when {
+                    lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
+                        lm.getCurrentLocation(
+                            LocationManager.GPS_PROVIDER,
+                            null,
+                            context.mainExecutor,
+                            apply
+                        )
+                    lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ->
+                        lm.getCurrentLocation(
+                            LocationManager.NETWORK_PROVIDER,
+                            null,
+                            context.mainExecutor,
+                            apply
+                        )
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                when {
+                    lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
+                        lm.requestSingleUpdate(
+                            LocationManager.GPS_PROVIDER,
+                            locationListener,
+                            Looper.getMainLooper()
+                        )
+                    lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ->
+                        lm.requestSingleUpdate(
+                            LocationManager.NETWORK_PROVIDER,
+                            locationListener,
+                            Looper.getMainLooper()
+                        )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("LocationProvider", "Fresh location request failed", e)
         }
     }
 
@@ -311,7 +416,8 @@ class LocationProvider(private val context: Context) {
     }
 
     fun requestImmediateLocation() {
-        startLocationUpdates()
+        // Force a fresh fix without reseeding last-known over the live position
+        startLocationUpdates(force = true, seedFromLastKnown = false)
     }
 
     fun startMockFleet(scope: CoroutineScope) {

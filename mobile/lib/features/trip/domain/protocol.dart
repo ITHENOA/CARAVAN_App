@@ -73,6 +73,7 @@ Map<String, dynamic> buildDestinationUpdate({
   required double longitude,
   required String leaderToken,
   String? label,
+  int? ifUpdatedAt,
 }) {
   return {
     'type': 'destination_update',
@@ -82,6 +83,20 @@ Map<String, dynamic> buildDestinationUpdate({
     'longitude': longitude,
     'leaderToken': leaderToken,
     if (label != null) 'label': label,
+    if (ifUpdatedAt != null) 'ifUpdatedAt': ifUpdatedAt,
+  };
+}
+
+Map<String, dynamic> buildDestinationClear({
+  required String leaderToken,
+  int? ifUpdatedAt,
+}) {
+  return {
+    'type': 'destination_clear',
+    'version': AppConstants.protocolVersion,
+    'timestamp': DateTime.now().millisecondsSinceEpoch,
+    'leaderToken': leaderToken,
+    if (ifUpdatedAt != null) 'ifUpdatedAt': ifUpdatedAt,
   };
 }
 

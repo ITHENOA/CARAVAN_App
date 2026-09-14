@@ -24,10 +24,13 @@ import { parseClientMessage, ProtocolError } from "./validation";
 const RATE_LIMIT_WINDOW_MS = 10_000;
 const RATE_LIMIT_MAX = 200;
 const LOCATION_MIN_INTERVAL_MS = 400;
+/** Drop marks that outlive a drive session so reconnect doesn't revive ancient pins. */
+const MARK_TTL_MS = 30 * 60 * 1000;
 
 interface MemberRuntime {
   displayName: string;
   carName?: string;
+  memberKind?: "vehicle" | "person";
   avatarColor?: string;
   latitude?: number;
   longitude?: number;
@@ -52,7 +55,7 @@ export class TripRoom extends DurableObject {
       segments?: Array<{ colorHex: string; points: Array<[number, number]> }>;
     }
   >();
-  private activeSpeakerId: string | null = null;
+  private activeSpeakers = new Set<string>();
   private trip: TripPersistedState | null = null;
   private initialized = false;
 
@@ -68,6 +71,7 @@ export class TripRoom extends DurableObject {
             this.members.set(att.clientId, {
               displayName: att.displayName ?? "Member",
               carName: att.carName,
+              memberKind: att.memberKind ?? "vehicle",
               avatarColor: att.avatarColor,
               lastSeenAt: nowMs(),
               isLeader: att.isLeader,
@@ -102,6 +106,7 @@ export class TripRoom extends DurableObject {
       lite[id] = {
         displayName: m.displayName,
         carName: m.carName,
+        memberKind: m.memberKind ?? "vehicle",
         avatarColor: m.avatarColor,
         lastSeenAt: m.lastSeenAt,
         isLeader: m.isLeader,
@@ -212,7 +217,19 @@ export class TripRoom extends DurableObject {
     try {
       await this.ensureLoaded();
       const att = this.getAttachment(ws);
-      if (!this.checkRateLimit(ws, att)) {
+
+      // Peek type cheaply so live PCM isn't killed by the general chat/location rate limit.
+      let peekedType: string | null = null;
+      if (typeof message === "string") {
+        try {
+          const preview = JSON.parse(message) as { type?: unknown };
+          if (typeof preview.type === "string") peekedType = preview.type;
+        } catch {
+          // parseClientMessage will surface the real error
+        }
+      }
+
+      if (peekedType !== "audio_chunk" && !this.checkRateLimit(ws, att)) {
         this.sendError(ws, "RATE_LIMITED", "Too many messages");
         return;
       }
@@ -231,6 +248,9 @@ export class TripRoom extends DurableObject {
           break;
         case "destination_update":
           await this.handleDestination(ws, msg);
+          break;
+        case "destination_clear":
+          await this.handleDestinationClear(ws, msg);
           break;
         case "map_mark":
           this.handleMapMark(ws, msg);
@@ -351,6 +371,7 @@ export class TripRoom extends DurableObject {
       id,
       displayName: m.displayName,
       carName: m.carName,
+      memberKind: m.memberKind ?? "vehicle",
       avatarColor: m.avatarColor,
       latitude: m.latitude,
       longitude: m.longitude,
@@ -420,6 +441,7 @@ export class TripRoom extends DurableObject {
     const runtime: MemberRuntime = {
       displayName: msg.displayName,
       carName: msg.carName,
+      memberKind: msg.memberKind ?? "vehicle",
       avatarColor: this.pickDistinctColor(msg.avatarColor, msg.clientId),
       lastSeenAt: nowMs(),
       isLeader,
@@ -448,12 +470,15 @@ export class TripRoom extends DurableObject {
       isLeader,
       displayName: msg.displayName,
       carName: msg.carName,
+      memberKind: runtime.memberKind,
       avatarColor: runtime.avatarColor,
       msgWindowStart: nowMs(),
       msgCount: 0,
     };
     this.saveAttachment(ws, att);
     await this.persistMembersLite();
+
+    this.pruneStaleMarks();
 
     this.send(ws, {
       type: "joined",
@@ -467,7 +492,7 @@ export class TripRoom extends DurableObject {
       destination: this.trip.destination,
       marks: Array.from(this.marks.values()),
       routes: Array.from(this.routes.values()),
-      activeSpeakerId: this.activeSpeakerId,
+      activeSpeakerId: this.activeSpeakers.values().next().value ?? null,
       inviteCode: this.trip.inviteCode,
     });
 
@@ -489,6 +514,15 @@ export class TripRoom extends DurableObject {
     });
   }
 
+  private pruneStaleMarks(): void {
+    const now = nowMs();
+    for (const [id, mark] of this.marks) {
+      if (now - (mark.updatedAt ?? 0) > MARK_TTL_MS) {
+        this.marks.delete(id);
+      }
+    }
+  }
+
   private async handleLeave(ws: WebSocket): Promise<void> {
     await this.detachSocket(ws, true);
     try {
@@ -502,14 +536,22 @@ export class TripRoom extends DurableObject {
     const att = this.getAttachment(ws);
     const clientId = att.clientId;
     if (clientId) {
+      // Replaced socket: new join already owns clientId — do not wipe its route/membership.
+      if (this.socketsByClient.get(clientId) !== ws) {
+        this.saveAttachment(ws, {
+          ...att,
+          joined: false,
+          clientId: null,
+        });
+        return;
+      }
       this.socketsByClient.delete(clientId);
       const m = this.members.get(clientId);
       if (m) {
         m.lastSeenAt = nowMs();
         this.members.set(clientId, m);
       }
-      if (this.activeSpeakerId === clientId) {
-        this.activeSpeakerId = null;
+      if (this.activeSpeakers.delete(clientId)) {
         this.broadcast({
           type: "ptt_release",
           version: PROTOCOL_VERSION,
@@ -746,7 +788,7 @@ export class TripRoom extends DurableObject {
 
     this.marks.clear();
     this.members.clear();
-    this.activeSpeakerId = null;
+    this.activeSpeakers.clear();
     this.trip = null;
     await this.ctx.storage.deleteAll();
 
@@ -774,6 +816,20 @@ export class TripRoom extends DurableObject {
       this.sendError(ws, "UNAUTHORIZED", "Leader token required");
       return;
     }
+    if (
+      typeof msg.ifUpdatedAt === "number" &&
+      this.trip.destination &&
+      this.trip.destination.updatedAt !== msg.ifUpdatedAt
+    ) {
+      this.sendError(ws, "INVALID_MESSAGE", "Stale destination");
+      this.send(ws, {
+        type: "destination_update",
+        version: PROTOCOL_VERSION,
+        timestamp: nowMs(),
+        destination: this.trip.destination,
+      });
+      return;
+    }
 
     const dest: Destination = {
       latitude: msg.latitude,
@@ -795,22 +851,53 @@ export class TripRoom extends DurableObject {
     });
   }
 
+  private async handleDestinationClear(
+    ws: WebSocket,
+    msg: Extract<ReturnType<typeof parseClientMessage>, { type: "destination_clear" }>,
+  ): Promise<void> {
+    const att = this.getAttachment(ws);
+    if (!att.joined || !att.clientId || !this.trip) {
+      this.sendError(ws, "NOT_JOINED", "Join required");
+      return;
+    }
+    const hash = await sha256Hex(msg.leaderToken);
+    if (!timingSafeEqual(hash, this.trip.leaderTokenHash)) {
+      this.sendError(ws, "UNAUTHORIZED", "Leader token required");
+      return;
+    }
+    if (
+      typeof msg.ifUpdatedAt === "number" &&
+      this.trip.destination &&
+      this.trip.destination.updatedAt !== msg.ifUpdatedAt
+    ) {
+      this.sendError(ws, "INVALID_MESSAGE", "Stale destination");
+      this.send(ws, {
+        type: "destination_update",
+        version: PROTOCOL_VERSION,
+        timestamp: nowMs(),
+        destination: this.trip.destination,
+      });
+      return;
+    }
+
+    this.trip.destination = null;
+    await this.persistTrip();
+    this.broadcast({
+      type: "destination_clear",
+      version: PROTOCOL_VERSION,
+      timestamp: nowMs(),
+      clientId: att.clientId,
+    });
+  }
+
   private handlePttRequest(ws: WebSocket): void {
     const att = this.getAttachment(ws);
     if (!att.joined || !att.clientId) {
       this.sendError(ws, "NOT_JOINED", "Join required");
       return;
     }
-    if (this.activeSpeakerId && this.activeSpeakerId !== att.clientId) {
-      this.send(ws, {
-        type: "ptt_busy",
-        version: PROTOCOL_VERSION,
-        timestamp: nowMs(),
-        activeSpeakerId: this.activeSpeakerId,
-      });
-      return;
-    }
-    this.activeSpeakerId = att.clientId;
+    // Open mic: multiple members can talk at once (no exclusive floor).
+    this.activeSpeakers.add(att.clientId);
     this.broadcast({
       type: "ptt_granted",
       version: PROTOCOL_VERSION,
@@ -823,10 +910,7 @@ export class TripRoom extends DurableObject {
   private handlePttRelease(ws: WebSocket): void {
     const att = this.getAttachment(ws);
     if (!att.joined || !att.clientId) return;
-    if (this.activeSpeakerId && this.activeSpeakerId !== att.clientId) {
-      return;
-    }
-    this.activeSpeakerId = null;
+    if (!this.activeSpeakers.delete(att.clientId)) return;
     this.broadcast({
       type: "ptt_release",
       version: PROTOCOL_VERSION,
@@ -861,9 +945,8 @@ export class TripRoom extends DurableObject {
   ): void {
     const att = this.getAttachment(ws);
     if (!att.joined || !att.clientId) return;
-    if (this.activeSpeakerId && this.activeSpeakerId !== att.clientId) {
-      return;
-    }
+    // Relay immediately — no floor/queue gate. PTT signals are UI-only.
+    this.activeSpeakers.add(att.clientId);
     this.broadcast(
       {
         type: "audio_chunk",

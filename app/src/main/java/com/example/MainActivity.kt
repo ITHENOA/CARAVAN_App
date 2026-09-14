@@ -25,7 +25,6 @@ import com.example.ui.screens.home.HomeScreen
 import com.example.ui.screens.settings.SettingsScreen
 import com.example.ui.screens.trip.TripScreen
 import com.example.ui.theme.CaravanTheme
-import com.example.ui.theme.NightSlateBg
 import com.example.ui.viewmodel.CaravanViewModel
 import org.maplibre.android.MapLibre
 
@@ -68,12 +67,8 @@ fun CaravanApp(viewModel: CaravanViewModel = viewModel()) {
     // Request permissions on start
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val locationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (locationGranted) {
-            viewModel.locationProvider.startLocationUpdates()
-        }
+    ) { _ ->
+        // Permission result only — GPS overlay stays off until the user taps the GPS button.
     }
 
     LaunchedEffect(Unit) {
@@ -107,6 +102,9 @@ fun CaravanApp(viewModel: CaravanViewModel = viewModel()) {
                 viewModel = viewModel,
                 onNavigateBack = {
                     navController.popBackStack()
+                },
+                onNavigateToSettings = {
+                    navController.navigate(CaravanRoutes.SETTINGS)
                 }
             )
         }
