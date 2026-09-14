@@ -35,6 +35,7 @@ class LocationController extends Notifier<DeviceLocation?> {
   DeviceLocation? _lastSent;
   double? _compassHeading;
   double? _lastGoodHeading;
+  Completer<DeviceLocation?>? _firstFix;
 
   @override
   DeviceLocation? build() {
@@ -58,14 +59,18 @@ class LocationController extends Notifier<DeviceLocation?> {
     return enabled;
   }
 
-  Future<void> start() async {
+  Future<DeviceLocation?> start() async {
     final ok = await ensurePermission();
     if (!ok) {
       AppLogger.d('Location permission denied');
-      return;
+      return null;
     }
     await _sub?.cancel();
     await _compassSub?.cancel();
+    _firstFix?.complete(null);
+    final firstFix = Completer<DeviceLocation?>();
+    _firstFix = firstFix;
+    state = null;
 
     _compassSub = FlutterCompass.events?.listen((event) {
       final h = event.heading;
@@ -98,6 +103,13 @@ class LocationController extends Notifier<DeviceLocation?> {
         AppLogger.d('GPS stream error', e, st);
       },
     );
+    return firstFix.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        if (identical(_firstFix, firstFix)) _firstFix = null;
+        return null;
+      },
+    );
   }
 
   Future<void> stop() async {
@@ -105,6 +117,8 @@ class LocationController extends Notifier<DeviceLocation?> {
     await _compassSub?.cancel();
     _sub = null;
     _compassSub = null;
+    _firstFix?.complete(null);
+    _firstFix = null;
   }
 
   double? _resolveHeading(Position pos) {
@@ -139,6 +153,8 @@ class LocationController extends Notifier<DeviceLocation?> {
       timestamp: pos.timestamp,
     );
     state = loc;
+    _firstFix?.complete(loc);
+    _firstFix = null;
     _maybePublish(loc);
   }
 

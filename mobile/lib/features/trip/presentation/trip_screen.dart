@@ -145,8 +145,7 @@ class _TripScreenState extends ConsumerState<TripScreen> {
       return;
     }
 
-    await ref.read(locationControllerProvider.notifier).start();
-    final loc = ref.read(locationControllerProvider);
+    final loc = await ref.read(locationControllerProvider.notifier).start();
     if (loc != null && _mapController != null) {
       await _mapController!.animateCamera(
         maplibre.CameraUpdate.newLatLngZoom(
@@ -214,13 +213,6 @@ class _TripScreenState extends ConsumerState<TripScreen> {
   void _joinMemberRoute(SharedRoute route) {
     HapticFeedback.mediumImpact();
     ref.read(routeControllerProvider.notifier).joinSharedRoute(route);
-    // Drop a mark at their destination so routing buttons stay available.
-    final dest = route.points.last;
-    ref.read(tripControllerProvider.notifier).setMapMark(
-          latitude: dest.latitude,
-          longitude: dest.longitude,
-          color: _myMarkColor(),
-        );
   }
 
   bool _samePoint(LatLng a, LatLng b) =>

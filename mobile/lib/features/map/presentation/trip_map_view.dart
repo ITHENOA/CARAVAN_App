@@ -612,27 +612,26 @@ class _TripMapViewState extends ConsumerState<TripMapView> {
       seen.add(id);
 
       final existing = _sharedRouteLines[id];
-      if (existing != null) {
-        for (final line in existing) {
-          try {
-            await c.removeLine(line);
-          } catch (_) {}
-        }
-      }
       // Always draw the dense main polyline — traffic segments are sparse/truncated.
       final geometry =
           route.points.map((p) => LatLng(p.latitude, p.longitude)).toList();
-      _sharedRouteLines[id] = [
-        await c.addLine(
-          LineOptions(
-            geometry: geometry,
-            lineColor: route.colorHex,
-            lineWidth: 5.0,
-            lineOpacity: 0.85,
-            lineJoin: 'round',
-          ),
-        ),
-      ];
+      final options = LineOptions(
+        geometry: geometry,
+        lineColor: route.colorHex,
+        lineWidth: 5.0,
+        lineOpacity: 0.85,
+        lineJoin: 'round',
+      );
+      if (existing != null && existing.length == 1) {
+        await c.updateLine(existing.first, options);
+      } else {
+        if (existing != null) {
+          for (final line in existing) {
+            try { await c.removeLine(line); } catch (_) {}
+          }
+        }
+        _sharedRouteLines[id] = [await c.addLine(options)];
+      }
     }
     if (epoch != _annoEpoch) return;
 

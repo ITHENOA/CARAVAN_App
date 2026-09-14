@@ -105,7 +105,10 @@ fun SettingsScreen(
     var aetherScan by remember { mutableStateOf(prefs.aetherScan) }
     var aetherNoize by remember { mutableStateOf(prefs.aetherNoize) }
     var aetherIp by remember { mutableStateOf(prefs.aetherIpMode) }
-    var dnsPreset by remember { mutableStateOf(prefs.dnsPreset.ifBlank { "google" }) }
+    var dnsEnabled by remember { mutableStateOf(prefs.isDnsEnabled) }
+    var dnsPreset by remember {
+        mutableStateOf(if (dnsEnabled) prefs.dnsPreset.ifBlank { "google" } else "system")
+    }
     var dnsCustomPrimary by remember { mutableStateOf(prefs.dnsCustomPrimary) }
     var dnsCustomSecondary by remember { mutableStateOf(prefs.dnsCustomSecondary) }
     var dnsMenuExpanded by remember { mutableStateOf(false) }
@@ -343,48 +346,75 @@ fun SettingsScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                ExposedDropdownMenuBox(
-                    expanded = dnsMenuExpanded,
-                    onExpandedChange = { dnsMenuExpanded = it },
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = DnsPresets.byId(dnsPreset).let { "${it.title} — ${it.subtitle}" },
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("DNS server") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dnsMenuExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .testTag("dns_preset_dropdown"),
-                        shape = RoundedCornerShape(12.dp)
+                    Text("Use custom DNS", fontWeight = FontWeight.Medium)
+                    Switch(
+                        checked = dnsEnabled,
+                        onCheckedChange = {
+                            dnsEnabled = it
+                            prefs.isDnsEnabled = it
+                            if (!it) {
+                                dnsPreset = "system"
+                                prefs.dnsPreset = "system"
+                            } else if (dnsPreset == "system") {
+                                dnsPreset = DnsPresets.ALL.first { preset -> preset.id != "system" }.id
+                                prefs.dnsPreset = dnsPreset
+                            }
+                            viewModel.applyProxySettings()
+                        },
+                        modifier = Modifier.testTag("dns_enabled")
                     )
-                    ExposedDropdownMenu(
+                }
+                if (dnsEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ExposedDropdownMenuBox(
                         expanded = dnsMenuExpanded,
-                        onDismissRequest = { dnsMenuExpanded = false }
+                        onExpandedChange = { dnsMenuExpanded = it },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        DnsPresets.ALL.forEach { preset ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(preset.title, fontWeight = FontWeight.Medium)
-                                        Text(preset.subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
-                                onClick = {
-                                    dnsPreset = preset.id
-                                    prefs.dnsPreset = preset.id
-                                    dnsMenuExpanded = false
-                                    viewModel.applyProxySettings()
-                                },
-                                modifier = Modifier.testTag("dns_preset_${preset.id}")
-                            )
+                        OutlinedTextField(
+                            value = DnsPresets.byId(dnsPreset).let { "${it.title} — ${it.subtitle}" },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("DNS server") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dnsMenuExpanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                .testTag("dns_preset_dropdown"),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = dnsMenuExpanded,
+                            onDismissRequest = { dnsMenuExpanded = false }
+                        ) {
+                            DnsPresets.ALL.filterNot { it.id == "system" }.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(preset.title, fontWeight = FontWeight.Medium)
+                                            Text(preset.subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    },
+                                    onClick = {
+                                        dnsPreset = preset.id
+                                        prefs.dnsPreset = preset.id
+                                        dnsMenuExpanded = false
+                                        viewModel.applyProxySettings()
+                                    },
+                                    modifier = Modifier.testTag("dns_preset_${preset.id}")
+                                )
+                            }
                         }
                     }
                 }
 
-                if (dnsPreset == "custom") {
+                if (dnsEnabled && dnsPreset == "custom") {
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = dnsCustomPrimary,
@@ -759,6 +789,23 @@ fun SettingsScreen(
                 ) {
                     Text("Reset to Default Server")
                 }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Caravan",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "Built by ITHENOA · Version 3.0.0",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Spacer(modifier = Modifier.height(20.dp))

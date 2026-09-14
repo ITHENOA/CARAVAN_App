@@ -108,11 +108,15 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
     /** Apply saved proxy + DNS prefs to HTTP + WebSocket clients. Safe on main thread. */
     fun applyProxySettings() {
-        val dns = com.example.data.network.DnsPresets.resolveOkHttpDns(
-            prefs.dnsPreset,
-            prefs.dnsCustomPrimary,
-            prefs.dnsCustomSecondary
-        )
+        val dns = if (prefs.isDnsEnabled) {
+            com.example.data.network.DnsPresets.resolveOkHttpDns(
+                prefs.dnsPreset,
+                prefs.dnsCustomPrimary,
+                prefs.dnsCustomSecondary
+            )
+        } else {
+            okhttp3.Dns.SYSTEM
+        }
         apiClient.updateDns(dns)
         wsClient.updateDns(dns)
 
@@ -149,6 +153,8 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
     /** Last fix the user tapped on the amber banner (−1 = none, 0 = Google DNS, 1 = Aether). */
     private var lastAppliedConnectionFix: Int = -1
+    private var suppressConnectionFailureUntil = 0L
+    private var delayedConnectionFailure: Job? = null
 
     fun reconnectCurrentTrip() {
         val state = _tripState.value
@@ -169,8 +175,11 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
      * Google DNS → Aether (wg/turbo/IPv4/off) → Settings/VPN.
      */
     fun applySuggestedConnectionFix(context: android.content.Context, onOpenSettings: () -> Unit) {
+        suppressConnectionFailureUntil = System.currentTimeMillis() + 2_500L
+        delayedConnectionFailure?.cancel()
         when (_tripState.value.connectionFixStep) {
             ConnectionFixStep.TRY_GOOGLE_DNS -> {
+                prefs.isDnsEnabled = true
                 prefs.dnsPreset = "google"
                 prefs.useAetherProxy = false
                 applyProxySettings()
@@ -184,6 +193,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                 reconnectCurrentTrip()
             }
             ConnectionFixStep.TRY_AETHER -> {
+                prefs.isDnsEnabled = false
                 prefs.dnsPreset = "system"
                 prefs.isProxyEnabled = false
                 prefs.aetherProtocol = "wg"
@@ -729,18 +739,31 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                         )
                     }
                 } else {
-                    advanceFixStepAfterFailure()
-                    val reason = event.error.message?.take(100) ?: "connection failed"
-                    val hint = when (_tripState.value.connectionFixStep) {
-                        ConnectionFixStep.TRY_GOOGLE_DNS -> " — tap Google DNS"
-                        ConnectionFixStep.TRY_AETHER -> " — tap Aether"
-                        ConnectionFixStep.OPEN_SETTINGS_OR_VPN -> " — turn on VPN or open Settings"
+                    val publishFailure = {
+                        advanceFixStepAfterFailure()
+                        val reason = event.error.message?.take(100) ?: "connection failed"
+                        val hint = when (_tripState.value.connectionFixStep) {
+                            ConnectionFixStep.TRY_GOOGLE_DNS -> " — tap Google DNS"
+                            ConnectionFixStep.TRY_AETHER -> " — tap Aether"
+                            ConnectionFixStep.OPEN_SETTINGS_OR_VPN -> " — turn on VPN or open Settings"
+                        }
+                        _tripState.update {
+                            it.copy(
+                                connectionStatus = CaravanConnectionStatus.RECONNECTING,
+                                connectionError = "Network: $reason$hint"
+                            )
+                        }
                     }
-                    _tripState.update {
-                        it.copy(
-                            connectionStatus = CaravanConnectionStatus.RECONNECTING,
-                            connectionError = "Network: $reason$hint"
-                        )
+                    val remaining = suppressConnectionFailureUntil - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        delayedConnectionFailure = viewModelScope.launch {
+                            delay(remaining)
+                            if (_tripState.value.connectionStatus != CaravanConnectionStatus.CONNECTED) {
+                                publishFailure()
+                            }
+                        }
+                    } else {
+                        publishFailure()
                     }
                 }
             }

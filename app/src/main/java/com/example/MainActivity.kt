@@ -13,10 +13,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -49,6 +53,13 @@ class MainActivity : ComponentActivity() {
             val isDarkMode by viewModel.isDarkMode.collectAsState()
 
             CaravanTheme(darkTheme = isDarkMode) {
+                val view = LocalView.current
+                val backgroundColor = MaterialTheme.colorScheme.background
+                SideEffect {
+                    val window = (view.context as ComponentActivity).window
+                    window.statusBarColor = backgroundColor.toArgb()
+                    WindowInsetsControllerCompat(window, view).isAppearanceLightStatusBars = !isDarkMode
+                }
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

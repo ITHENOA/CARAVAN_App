@@ -173,6 +173,7 @@ fun ConvoyMapView(
             map.uiSettings.isAttributionEnabled = false
             map.uiSettings.isLogoEnabled = false
             map.uiSettings.isCompassEnabled = true
+            map.uiSettings.setCompassMargins(0, (96 * context.resources.displayMetrics.density).roundToInt(), (16 * context.resources.displayMetrics.density).roundToInt(), 0)
             map.uiSettings.isRotateGesturesEnabled = true
             map.uiSettings.isTiltGesturesEnabled = true
             map.uiSettings.isZoomGesturesEnabled = true
@@ -411,10 +412,7 @@ fun ConvoyMapView(
         if (!isMapReady) return@LaunchedEffect
 
         try {
-            activeSharedPolylines.forEach {
-                try { map.removePolyline(it) } catch (_: Exception) {}
-            }
-            val newPolylines = mutableListOf<org.maplibre.android.annotations.Polyline>()
+            val desired = mutableListOf<Pair<List<LatLng>, Int>>()
             val colorById = members.associate { it.id to (it.avatarColor ?: "#0EA5E9") }
             sharedRoutes.values.forEach { sr ->
                 if (sr.clientId == selfClientId) return@forEach
@@ -434,17 +432,27 @@ fun ConvoyMapView(
                     } catch (_: Exception) {
                         android.graphics.Color.parseColor("#F59E0B")
                     }
-                    newPolylines.add(
-                        map.addPolyline(
-                            PolylineOptions()
-                                .addAll(latLngs)
-                                .color(c)
-                                .width(4.5f)
-                        )
+                    desired.add(latLngs to c)
+                }
+            }
+            if (desired.size == activeSharedPolylines.size) {
+                desired.forEachIndexed { index, (points, color) ->
+                    val line = activeSharedPolylines[index]
+                    line.points = points
+                    line.color = color
+                    line.width = 4.5f
+                    map.updatePolyline(line)
+                }
+            } else {
+                activeSharedPolylines.forEach {
+                    try { map.removePolyline(it) } catch (_: Exception) {}
+                }
+                activeSharedPolylines = desired.map { (points, color) ->
+                    map.addPolyline(
+                        PolylineOptions().addAll(points).color(color).width(4.5f)
                     )
                 }
             }
-            activeSharedPolylines = newPolylines
         } catch (e: Exception) {
             android.util.Log.e("ConvoyMapView", "Failed to update shared polylines", e)
         }

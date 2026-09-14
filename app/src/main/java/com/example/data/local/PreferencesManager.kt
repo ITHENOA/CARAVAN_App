@@ -47,6 +47,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_AETHER_NOIZE = "aether_noize"
         private const val KEY_AETHER_IP = "aether_ip"
         private const val KEY_DNS_PRESET = "dns_preset"
+        private const val KEY_DNS_ENABLED = "dns_enabled"
         private const val KEY_DNS_CUSTOM_PRIMARY = "dns_custom_primary"
         private const val KEY_DNS_CUSTOM_SECONDARY = "dns_custom_secondary"
 
@@ -256,8 +257,12 @@ class PreferencesManager(context: Context) {
         set(value) = prefs.edit().putString(KEY_AETHER_IP, value).apply()
 
     /** See [com.example.data.network.DnsPresets] ids: system, cloudflare, google, …, custom */
+    var isDnsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DNS_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_DNS_ENABLED, value).apply()
+
     var dnsPreset: String
-        get() = prefs.getString(KEY_DNS_PRESET, "google") ?: "google"
+        get() = prefs.getString(KEY_DNS_PRESET, "system") ?: "system"
         set(value) = prefs.edit().putString(KEY_DNS_PRESET, value).apply()
 
     var dnsCustomPrimary: String

@@ -216,6 +216,9 @@ class LocationProvider(private val context: Context) {
         startSensorUpdates()
         val lm = locationManager ?: return
         try {
+            if (!seedFromLastKnown) {
+                _currentLocation.value = DeviceLocation()
+            }
             // 1. Seed from last-known only when we have no usable fix yet.
             // Never overwrite a live GPS fix with a stale last-known (causes snap-back).
             if (seedFromLastKnown && !_currentLocation.value.isRealGps) {
