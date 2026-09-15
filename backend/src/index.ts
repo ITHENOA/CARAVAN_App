@@ -81,7 +81,7 @@ export default {
         return stub.fetch(request);
       }
 
-      return withCors(errorResponse(404, "NOT_FOUND", "Route not found"));
+      return env.ASSETS.fetch(request);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Internal error";
       return withCors(errorResponse(500, "INTERNAL", message));

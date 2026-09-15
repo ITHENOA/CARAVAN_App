@@ -231,6 +231,15 @@ object CaravanProtocol {
         }.toString()
     }
 
+    fun buildRegisterPush(fcmToken: String): String {
+        return JSONObject().apply {
+            put("type", "register_push")
+            put("version", VERSION)
+            put("timestamp", System.currentTimeMillis())
+            put("fcmToken", fcmToken)
+        }.toString()
+    }
+
     fun parseMember(json: JSONObject, defaultLeaderId: String? = null): TripMember {
         val id = json.optString("id", json.optString("clientId", ""))
         val isLeaderExplicit = json.optBoolean("isLeader", false)

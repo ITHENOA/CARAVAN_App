@@ -1,0 +1,14 @@
+# Example for local Wrangler (copy to backend/.dev.vars — that file is gitignored).
+#
+# PowerShell from repo root:
+#   $j = Get-Content '.\caravan-*-firebase-adminsdk-*.json' -Raw | ConvertFrom-Json | ConvertTo-Json -Compress -Depth 20
+#   Set-Content -Path backend\.dev.vars -Value "FCM_SERVICE_ACCOUNT_JSON=$j" -NoNewline
+#
+# Production deploy secret:
+#   cd backend
+#   Get-Content '..\caravan-*-firebase-adminsdk-*.json' -Raw | npx wrangler secret put FCM_SERVICE_ACCOUNT_JSON
+#
+# Android still needs app/google-services.json from Firebase Console
+# (Add app → Android, package: com.aistudio.caravan.kqzvpm).
+
+FCM_SERVICE_ACCOUNT_JSON=

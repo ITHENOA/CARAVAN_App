@@ -344,6 +344,15 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
         seq,
       };
     }
+    case "register_push": {
+      const fcmToken = requireString(obj, "fcmToken").slice(0, 4096);
+      return {
+        type: "register_push",
+        version: PROTOCOL_VERSION,
+        timestamp,
+        fcmToken,
+      };
+    }
     default:
       throw new ProtocolError("INVALID_MESSAGE", `Unknown message type: ${type}`);
   }

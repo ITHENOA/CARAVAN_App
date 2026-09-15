@@ -18,6 +18,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -25,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.push.PushRegistrar
 import com.example.ui.screens.home.HomeScreen
 import com.example.ui.screens.settings.SettingsScreen
 import com.example.ui.screens.trip.TripScreen
@@ -74,6 +76,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CaravanApp(viewModel: CaravanViewModel = viewModel()) {
     val navController = rememberNavController()
+    val context = LocalContext.current
 
     // Request permissions on start
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -83,13 +86,16 @@ fun CaravanApp(viewModel: CaravanViewModel = viewModel()) {
     }
 
     LaunchedEffect(Unit) {
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.RECORD_AUDIO
-            )
+        val perms = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.RECORD_AUDIO,
         )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            perms += Manifest.permission.POST_NOTIFICATIONS
+        }
+        permissionLauncher.launch(perms.toTypedArray())
+        PushRegistrar.ensureChannel(context)
     }
 
     NavHost(

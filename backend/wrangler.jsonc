@@ -3,6 +3,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-09",
   "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../web",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
   "durable_objects": {
     "bindings": [
       {

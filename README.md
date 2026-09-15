@@ -1,6 +1,6 @@
 # Caravan
 
-Temporary product name (replace from one config location in the Flutter app: `AppConstants.productName`).
+Temporary product name.
 
 **Caravan** helps groups traveling in multiple cars share live locations, a common destination, and Push-To-Talk voice — without Firebase, paid map SDKs, or a conventional VPS.
 
@@ -8,7 +8,7 @@ Temporary product name (replace from one config location in the Flutter app: `Ap
 
 | Piece | Tech |
 | --- | --- |
-| Mobile | Flutter (Android-first) |
+| Clients | Kotlin/Android + standalone Web client |
 | Backend | Cloudflare Workers + Durable Objects + WebSocket Hibernation |
 | Map | MapLibre + configurable open style (OpenFreeMap for development) |
 | Voice | WebRTC mesh PTT (Worker is signaling only) |
@@ -19,7 +19,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Repository layout
 
 ```
-mobile/     Flutter application
+web/        Standalone browser application
+app/        Kotlin/Android application
 backend/    Cloudflare Worker
 docs/       Architecture, protocol, setup, field tests
 scripts/    Local integration helpers
@@ -28,7 +29,6 @@ scripts/    Local integration helpers
 ## Requirements
 
 - Node.js 20+
-- Flutter 3.29+ / Dart 3.7+ (for MapLibre)
 - Android SDK (for APK builds)
 - Cloudflare account (free tier) for deploy
 
@@ -47,17 +47,14 @@ Health: `http://127.0.0.1:8787/health`
 
 Full Cloudflare steps: [docs/CLOUDFLARE_SETUP.md](docs/CLOUDFLARE_SETUP.md)
 
-## Quick start — Flutter
+## Quick start — Web
 
 ```powershell
-cd mobile
-flutter pub get
-flutter analyze
-flutter test
-flutter run
+cd backend
+npx wrangler dev
 ```
 
-Configure API/WS URLs in `mobile/lib/core/config/app_config.dart` or via `--dart-define`.
+The Worker serves the files in `web/` and keeps the API and WebSocket routes on the same origin.
 
 Android emulator → local Worker: `http://10.0.2.2:8787` / `ws://10.0.2.2:8787`
 
@@ -79,7 +76,7 @@ npx wrangler login
 npm run deploy
 ```
 
-Put the workers.dev URL into Flutter config.
+The deployed workers.dev URL is the browser app URL.
 
 ## Testing
 
@@ -88,26 +85,25 @@ cd backend
 npm test
 npm run typecheck
 
-cd ../mobile
-flutter analyze
-flutter test
+cd ../app
+./gradlew assembleDebug
 ```
 
 ## APK build
 
 ```powershell
-cd mobile
-flutter build apk --debug
+cd app
+./gradlew assembleDebug
 ```
 
 Debug APK path (typical):
 
-`mobile/build/app/outputs/flutter-apk/app-debug.apk`
+`app/build/outputs/apk/debug/app-debug.apk`
 
 Release requires your own signing config:
 
 ```powershell
-flutter build apk --release
+./gradlew assembleRelease
 ```
 
 ## Documentation

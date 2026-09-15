@@ -1,0 +1,19 @@
+{
+  "name": "Caravan Convoy",
+  "short_name": "Caravan",
+  "description": "Live convoy locations, routes, chat and push-to-talk.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1720",
+  "theme_color": "#1769e0",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

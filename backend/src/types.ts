@@ -87,7 +87,8 @@ export type ClientMessageType =
   | "ice_candidate"
   | "chat_message"
   | "audio_chunk"
-  | "ping";
+  | "ping"
+  | "register_push";
 
 export type ServerMessageType =
   | "joined"
@@ -228,6 +229,11 @@ export interface AudioChunkMessage extends BaseMessage {
   clientId?: string;
 }
 
+export interface RegisterPushMessage extends BaseMessage {
+  type: "register_push";
+  fcmToken: string;
+}
+
 export type ClientMessage =
   | JoinMessage
   | LeaveMessage
@@ -244,7 +250,8 @@ export type ClientMessage =
   | IceCandidateMessage
   | ChatMessage
   | AudioChunkMessage
-  | PingMessage;
+  | PingMessage
+  | RegisterPushMessage;
 
 export interface ErrorMessage extends BaseMessage {
   type: "error";

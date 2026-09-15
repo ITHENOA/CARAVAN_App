@@ -43,6 +43,9 @@ class VoicePttController(private val context: Context) {
     private val _voiceNoteRecording = MutableStateFlow(false)
     val voiceNoteRecording: StateFlow<Boolean> = _voiceNoteRecording.asStateFlow()
 
+    private val _mutedPeerIds = MutableStateFlow<Set<String>>(emptySet())
+    val mutedPeerIds: StateFlow<Set<String>> = _mutedPeerIds.asStateFlow()
+
     /** ClientId of the remote speaker shown in the preview chip (name alone can mismatch). */
     private var activeSpeakerClientId: String? = null
     private var speakingClearJob: Job? = null
@@ -191,6 +194,20 @@ class VoicePttController(private val context: Context) {
         }
     }
 
+    fun togglePeerMute(peerId: String) {
+        _mutedPeerIds.value = _mutedPeerIds.value.toMutableSet().also { muted ->
+            if (!muted.add(peerId)) muted.remove(peerId)
+        }
+    }
+
+    fun setAllPeersMuted(peerIds: Iterable<String>, muted: Boolean) {
+        _mutedPeerIds.value = _mutedPeerIds.value.toMutableSet().also { current ->
+            peerIds.forEach { peerId ->
+                if (muted) current.add(peerId) else current.remove(peerId)
+            }
+        }
+    }
+
     fun onFloorReleased() {
         val wasTransmitting = _pttState.value == PttState.TRANSMITTING
         _pttState.value = PttState.IDLE
@@ -223,8 +240,9 @@ class VoicePttController(private val context: Context) {
      * Streams incoming raw PCM 16-bit mono audio data from another convoy member directly through AudioTrack.
      */
     @Synchronized
-    fun playAudioChunk(pcmData: ByteArray, sampleRate: Int = 16000) {
+    fun playAudioChunk(pcmData: ByteArray, sampleRate: Int = 16000, speakerId: String? = null) {
         if (pcmData.isEmpty()) return
+        if (speakerId != null && _mutedPeerIds.value.contains(speakerId)) return
         try {
             routePlaybackToSpeaker()
             if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {

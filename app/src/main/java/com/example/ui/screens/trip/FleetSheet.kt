@@ -40,6 +40,7 @@ fun ConvoyTopBar(
     inviteCode: String,
     tripId: String = "",
     connectionStatus: CaravanConnectionStatus,
+    connectionMethod: String? = null,
     memberCount: Int,
     isDarkMode: Boolean = false,
     onToggleDarkMode: () -> Unit = {},
@@ -156,6 +157,21 @@ fun ConvoyTopBar(
                         )
                     }
 
+                    // Small shortcut to app settings
+                    IconButton(
+                        onClick = onOpenSettings,
+                        modifier = Modifier
+                            .size(30.dp)
+                            .testTag("open_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+
                     // Connection Status
                     Surface(
                         color = when (connectionStatus) {
@@ -184,22 +200,33 @@ fun ConvoyTopBar(
                                     )
                             )
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = when (connectionStatus) {
-                                    CaravanConnectionStatus.CONNECTED -> "Live"
-                                    CaravanConnectionStatus.CONNECTING -> "Connecting"
-                                    CaravanConnectionStatus.RECONNECTING -> "Syncing"
-                                    else -> "Offline"
-                                },
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = when (connectionStatus) {
-                                    CaravanConnectionStatus.CONNECTED -> CaravanEmerald
-                                    CaravanConnectionStatus.CONNECTING,
-                                    CaravanConnectionStatus.RECONNECTING -> CaravanAmber
-                                    else -> CaravanCrimson
+                            Column(horizontalAlignment = Alignment.Start) {
+                                Text(
+                                    text = when (connectionStatus) {
+                                        CaravanConnectionStatus.CONNECTED -> "Live"
+                                        CaravanConnectionStatus.CONNECTING -> "Connecting"
+                                        CaravanConnectionStatus.RECONNECTING -> "Syncing"
+                                        else -> "Offline"
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = when (connectionStatus) {
+                                        CaravanConnectionStatus.CONNECTED -> CaravanEmerald
+                                        CaravanConnectionStatus.CONNECTING,
+                                        CaravanConnectionStatus.RECONNECTING -> CaravanAmber
+                                        else -> CaravanCrimson
+                                    }
+                                )
+                                if (connectionStatus == CaravanConnectionStatus.CONNECTED && connectionMethod != null) {
+                                    Text(
+                                        text = connectionMethod,
+                                        fontSize = 7.sp,
+                                        lineHeight = 7.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = CaravanEmerald.copy(alpha = 0.8f)
+                                    )
                                 }
-                            )
+                            }
                         }
                     }
 
@@ -254,6 +281,11 @@ fun ConvoyTopBar(
 fun FleetBottomSheet(
     members: List<TripMember>,
     userLocation: DeviceLocation,
+    mutedMemberIds: Set<String> = emptySet(),
+    onToggleAllMute: () -> Unit = {},
+    onToggleMemberMute: (String) -> Unit = {},
+    allMuted: Boolean = false,
+    onFitAllMembers: () -> Unit = {},
     sharedRoutes: Map<String, com.example.data.model.SharedRoute> = emptyMap(),
     marks: Map<String, MapMark> = emptyMap(),
     onDismiss: () -> Unit,
@@ -290,6 +322,19 @@ fun FleetBottomSheet(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallCircleAction(
+                        icon = Icons.Default.FitScreen,
+                        contentDescription = "Show all members on map",
+                        onClick = onFitAllMembers
+                    )
+                    SmallCircleAction(
+                        icon = if (allMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                        contentDescription = if (allMuted) "Unmute all members" else "Mute all members",
+                        active = allMuted,
+                        onClick = onToggleAllMute
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -308,6 +353,8 @@ fun FleetBottomSheet(
                         userLocation = userLocation,
                         hasSharedRoute = hasSharedRoute,
                         hasMark = memberMark != null,
+                        isMuted = mutedMemberIds.contains(member.id),
+                        onToggleMute = { onToggleMemberMute(member.id) },
                         onFollowRoute = {
                             onFollowMemberRoute(member.id)
                             onDismiss()
@@ -334,6 +381,8 @@ fun FleetMemberRow(
     userLocation: DeviceLocation,
     hasSharedRoute: Boolean = false,
     hasMark: Boolean = false,
+    isMuted: Boolean = false,
+    onToggleMute: () -> Unit = {},
     onFollowRoute: () -> Unit = {},
     onNavigateToMark: () -> Unit = {},
     onClick: () -> Unit
@@ -478,6 +527,20 @@ fun FleetMemberRow(
                 }
             }
 
+            IconButton(
+                onClick = onToggleMute,
+                modifier = Modifier
+                    .size(36.dp)
+                    .testTag("mute_member_button_${member.id}")
+            ) {
+                Icon(
+                    if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                    contentDescription = if (isMuted) "Unmute member" else "Mute member",
+                    tint = if (isMuted) CaravanCrimson else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+
             // Speed & Distance
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -493,5 +556,24 @@ fun FleetMemberRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SmallCircleAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    active: Boolean = false,
+    onClick: () -> Unit
+) {
+    FilledIconButton(
+        onClick = onClick,
+        modifier = Modifier.size(36.dp),
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = if (active) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    ) {
+        Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
 }

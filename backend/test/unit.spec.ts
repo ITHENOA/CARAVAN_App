@@ -79,4 +79,17 @@ describe("validation", () => {
       ),
     ).toThrow(ProtocolError);
   });
+
+  it("parses register_push messages", () => {
+    const msg = parseClientMessage(
+      JSON.stringify({
+        type: "register_push",
+        version: 1,
+        timestamp: Date.now(),
+        fcmToken: "tok_abc",
+      }),
+    );
+    expect(msg.type).toBe("register_push");
+    if (msg.type === "register_push") expect(msg.fcmToken).toBe("tok_abc");
+  });
 });

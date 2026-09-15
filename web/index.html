@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Caravan">
+  <title>Caravan</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,500,0,0">
+  <link href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main id="app" class="shell">
+    <section id="home-view" class="view">
+      <header class="topbar"><div class="brand"><span class="brand-mark">◆</span><span>Caravan</span></div><button id="settings-button" class="icon-button" title="Settings">⚙</button></header>
+      <div class="content home-content">
+        <div id="profile-card" class="profile-card"></div>
+        <div class="home-actions"><button id="create-button" class="primary-button">＋ Create Convoy</button><button id="join-button" class="secondary-button">↪ Join with Code / QR</button></div>
+        <section class="saved-section"><h2>Your Convoys</h2><p id="saved-caption" class="muted">Create or join a trip. It stays here until you delete it.</p><div id="saved-trips" class="saved-trips"></div></section>
+      </div>
+    </section>
+    <section id="trip-view" class="view trip-view hidden">
+      <div id="map"></div>
+      <div class="trip-overlay">
+        <header class="convoy-topbar">
+          <button id="back-button" class="round-button">‹</button>
+          <div class="convoy-identity"><strong id="trip-title">Caravan</strong><button id="copy-code" class="invite-code">Code: <b id="invite-code-label">----</b> <span class="material-symbols-rounded">content_copy</span></button><button id="share-button" class="qr-button" title="Share invite"><span class="material-symbols-rounded">qr_code_2</span></button></div>
+          <div class="convoy-actions"><button id="destination-header-button" class="top-action amber" title="Set destination"><span class="material-symbols-rounded">add_location_alt</span></button><button id="theme-button" class="top-action" title="Toggle theme"><span class="material-symbols-rounded">dark_mode</span></button><button id="trip-settings-button" class="top-action" title="Settings"><span class="material-symbols-rounded">settings</span></button><span id="connection-status" class="connection-chip offline"><i></i><b>Offline</b></span><button id="fleet-button" class="member-count" title="Open convoy members"><span class="material-symbols-rounded">directions_car</span> <b id="member-count">0</b></button><button id="leave-button" class="top-action leave" title="Leave convoy"><span class="material-symbols-rounded">exit_to_app</span></button></div>
+        </header>
+        <div id="destination-hud" class="destination-hud hidden"><span class="hud-icon material-symbols-rounded">navigation</span><div class="hud-copy"><strong id="destination-label">Marked Point</strong><span id="destination-info">-- · ETA: --</span></div><button id="osrm-button" class="route-mini active" title="Regular route"><span class="material-symbols-rounded">navigation</span></button><button id="neshan-button" class="route-mini green" title="Neshan route"><span class="material-symbols-rounded">traffic</span></button><button id="clear-destination" class="hud-close">×</button><button id="start-navigation" class="start-navigation hidden"><span class="material-symbols-rounded">directions_car</span> Start navigation</button></div>
+        <div id="message-previews" class="message-previews"></div>
+        <div class="map-controls"><button id="locate-button" class="map-control" title="My location"><span class="material-symbols-rounded">my_location</span></button><button id="mark-button" class="map-control" title="Place map mark"><span class="material-symbols-rounded">add_location_alt</span></button></div>
+        <section id="fleet-panel" class="modal-sheet fleet-sheet hidden"><div class="sheet-handle"></div><div class="sheet-heading"><h2 id="fleet-title">Convoy (0 members)</h2><div class="sheet-actions"><button id="fit-members" class="sheet-icon">⊞</button><button id="mute-members" class="sheet-icon">◖</button></div></div><div id="members" class="members"></div></section>
+        <div class="cockpit"><div id="quick-prompts" class="quick-prompts hidden"><button>We are stopping</button><button>Slow down</button><button>All good</button><button id="open-chat-from-prompts">Open chat</button></div><div class="cockpit-row"><button id="ptt-button" class="ptt-button"><span class="ptt-icon material-symbols-rounded">mic_none</span><span><b>PUSH TO TALK</b><small>Tap to toggle, or hold to talk</small></span></button><button id="voice-button" class="voice-button" title="Voice note"><span class="material-symbols-rounded">mic_none</span></button><button id="chat-button" class="chat-fab" title="Chat and quick prompts"><span class="material-symbols-rounded">chat</span><i></i></button></div></div>
+        <section id="chat-sheet" class="modal-sheet bottom-sheet hidden"><div class="sheet-handle"></div><div class="sheet-heading"><h2>Convoy Radio & Messages</h2><button id="close-chat" class="icon-button">×</button></div><div id="chat-messages" class="chat-messages"></div><form id="chat-form" class="chat-form"><input id="chat-input" autocomplete="off" maxlength="500" placeholder="Broadcast message..."><button class="send-button" type="submit">➤</button></form></section>
+      </div>
+    </section>
+    <section id="settings-view" class="view hidden"><header class="topbar"><button id="settings-back" class="icon-button">‹</button><h2>Settings</h2><span></span></header><div class="content settings-content"><label class="setting-row"><span>Metric units</span><input id="metric-setting" type="checkbox" checked></label><label class="setting-row"><span>PTT sound</span><input id="sound-setting" type="checkbox" checked></label><button id="clear-data" class="danger-button">Clear local data</button></div></section>
+  </main>
+  <dialog id="profile-dialog"><form method="dialog" id="profile-form"><h2>Your profile</h2><label>Name<input id="profile-name" required maxlength="40"></label><label>Vehicle<input id="profile-car" maxlength="40"></label><label class="check-label"><input id="profile-person" type="checkbox"> On foot</label><div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button value="save" class="primary-button">Save</button></div></form></dialog>
+  <dialog id="trip-dialog"><form method="dialog" id="trip-form"><h2 id="trip-dialog-title">Create convoy</h2><label id="trip-name-row">Convoy name<input id="trip-name" maxlength="80"></label><label id="invite-row" class="hidden">Invite code<input id="invite-code" maxlength="32" autocapitalize="characters"></label><div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button value="submit" class="primary-button">Continue</button></div></form></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script><script src="/app.js?v=3"></script><script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js');</script>
+</body>
+</html>

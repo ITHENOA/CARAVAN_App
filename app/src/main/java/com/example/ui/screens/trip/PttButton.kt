@@ -10,6 +10,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicNone
 import androidx.compose.material.icons.filled.VolumeUp
@@ -284,11 +286,13 @@ fun ChatFab(
 @Composable
 fun VoiceNoteButton(
     isRecording: Boolean,
+    isReadyToSend: Boolean = false,
     audioAmplitude: Float = 0f,
     enabled: Boolean = true,
     onToggle: () -> Unit,
     onStart: () -> Unit,
     onRelease: () -> Unit,
+    onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -301,6 +305,7 @@ fun VoiceNoteButton(
     val backgroundColor by animateColorAsState(
         targetValue = when {
             isRecording -> CaravanPurple
+            isReadyToSend -> CaravanBlue
             !enabled -> MaterialTheme.colorScheme.outline
             else -> CaravanEmerald
         },
@@ -314,53 +319,82 @@ fun VoiceNoteButton(
 
     Box(
         modifier = modifier
-            .size(64.dp)
-            .shadow(elevation = if (isRecording) 12.dp else 4.dp, shape = RoundedCornerShape(22.dp))
-            .clip(RoundedCornerShape(22.dp))
-            .background(backgroundColor)
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitFirstDown(requireUnconsumed = false)
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            .width(64.dp)
+            .height(64.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        if (isReadyToSend) {
+            SmallFloatingActionButton(
+                onClick = onCancel,
+                containerColor = CaravanCrimson,
+                contentColor = Color.White,
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = (-28).dp)
+                    .size(24.dp)
+                    .testTag("cancel_voice_note")
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "Discard voice note", modifier = Modifier.size(14.dp))
+            }
+        }
 
-                        if (currentRecording) {
-                            waitForUpOrCancellation()
-                            isLatched = false
-                            currentOnRelease()
-                        } else {
-                            try {
-                                val up = withTimeout(280L) {
-                                    waitForUpOrCancellation()
-                                }
-                                if (up != null) {
-                                    isLatched = true
-                                    currentOnToggle()
-                                }
-                            } catch (_: PointerEventTimeoutCancellationException) {
-                                isLatched = false
-                                currentOnStart()
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .shadow(elevation = if (isRecording) 12.dp else 4.dp, shape = RoundedCornerShape(22.dp))
+                .clip(RoundedCornerShape(22.dp))
+                .background(backgroundColor)
+                .pointerInput(enabled, isReadyToSend) {
+                    if (!enabled) return@pointerInput
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitFirstDown(requireUnconsumed = false)
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                            if (isReadyToSend) {
+                                currentOnToggle()
+                            } else if (currentRecording) {
                                 waitForUpOrCancellation()
+                                isLatched = false
                                 currentOnRelease()
+                            } else {
+                                try {
+                                    val up = withTimeout(280L) {
+                                        waitForUpOrCancellation()
+                                    }
+                                    if (up != null) {
+                                        isLatched = true
+                                        currentOnToggle()
+                                    }
+                                } catch (_: PointerEventTimeoutCancellationException) {
+                                    isLatched = false
+                                    currentOnStart()
+                                    waitForUpOrCancellation()
+                                    currentOnRelease()
+                                }
                             }
                         }
                     }
                 }
-            }
-            .testTag("voice_note_button"),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = if (isRecording) Icons.Default.Mic else Icons.Default.MicNone,
-                contentDescription = if (isRecording) "Stop voice note" else "Record voice note",
-                tint = Color.White,
-                modifier = Modifier.size(26.dp)
-            )
-            if (isRecording) {
-                Spacer(modifier = Modifier.height(4.dp))
-                LiveAudioWaveform(amplitude = audioAmplitude)
+                .testTag("voice_note_button"),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = if (isReadyToSend) Icons.Default.ArrowUpward else if (isRecording) Icons.Default.Mic else Icons.Default.MicNone,
+                    contentDescription = when {
+                        isReadyToSend -> "Send voice note"
+                        isRecording -> "Stop voice note"
+                        else -> "Record voice note"
+                    },
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp)
+                )
+                if (isRecording) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LiveAudioWaveform(amplitude = audioAmplitude)
+                }
             }
         }
     }

@@ -11,6 +11,7 @@ import com.example.data.network.*
 import com.example.data.protocol.CaravanProtocol
 import com.example.data.voice.PttState
 import com.example.data.voice.VoicePttController
+import com.example.push.PushRegistrar
 import com.example.util.ConvoyUtils
 import com.example.util.InviteQr
 import kotlinx.coroutines.*
@@ -73,7 +74,8 @@ data class TripUiState(
     val activeSpeakerName: String? = null,
     val pttState: PttState = PttState.IDLE,
     val audioAmplitude: Float = 0f,
-    val voiceNoteRecording: Boolean = false
+    val voiceNoteRecording: Boolean = false,
+    val voiceNoteReady: Boolean = false
 )
 
 class CaravanViewModel(application: Application) : AndroidViewModel(application) {
@@ -89,8 +91,15 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     val prefs = PreferencesManager(application)
     val apiClient = CaravanApiClient(prefs.apiBaseUrl)
     val wsClient = CaravanWebSocketClient(prefs.wsBaseUrl)
+    private var pendingVoiceNote: ByteArray? = null
     val locationProvider = LocationProvider(application)
     val pttController = VoicePttController(application)
+    val mutedPeerIds: StateFlow<Set<String>> = pttController.mutedPeerIds
+
+    fun togglePeerMute(peerId: String) = pttController.togglePeerMute(peerId)
+
+    fun setAllPeersMuted(peerIds: Iterable<String>, muted: Boolean) =
+        pttController.setAllPeersMuted(peerIds, muted)
 
     private val _isDarkMode = MutableStateFlow(prefs.isDarkMode)
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
@@ -320,7 +329,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         pttController.onVoiceNoteAutoStop = {
-            viewModelScope.launch { releaseVoiceNote() }
+            viewModelScope.launch { finishVoiceNoteRecording() }
         }
 
         // Local GPS/presence staleness: keep last known position, mark reconnecting/offline for UI.
@@ -857,6 +866,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                         _tripState.update { it.copy(sharedRoutes = routeMap) }
                     }
                 }
+                registerPushTokenAfterJoin()
             }
             "member_joined" -> {
                 val mJson = json.optJSONObject("member") ?: json
@@ -1039,7 +1049,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                             try {
                                 val bytes = android.util.Base64.decode(dataB64, android.util.Base64.DEFAULT)
                                 val sampleRate = json.optInt("sampleRate", 16000)
-                                pttController.playAudioChunk(bytes, sampleRate)
+                                pttController.playAudioChunk(bytes, sampleRate, cid)
                             } catch (e: Exception) {
                                 android.util.Log.e("CaravanVM", "Error decoding audio chunk", e)
                             }
@@ -1481,8 +1491,10 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleVoiceNote() {
-        if (_tripState.value.voiceNoteRecording) {
-            releaseVoiceNote()
+        if (_tripState.value.voiceNoteReady) {
+            sendVoiceNote()
+        } else if (_tripState.value.voiceNoteRecording) {
+            finishVoiceNoteRecording()
         } else {
             startVoiceNote()
         }
@@ -1496,12 +1508,36 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun releaseVoiceNote() {
+        finishVoiceNoteRecording()
+    }
+
+    fun finishVoiceNoteRecording() {
         viewModelScope.launch(Dispatchers.IO) {
             val pcm = pttController.stopVoiceNote()
             if (pcm.isEmpty()) {
                 android.util.Log.w("CaravanVM", "Voice note empty — not sent")
+                withContext(Dispatchers.Main) {
+                    _tripState.update { it.copy(voiceNoteReady = false) }
+                }
                 return@launch
             }
+            pendingVoiceNote = pcm
+            withContext(Dispatchers.Main) {
+                _tripState.update { it.copy(voiceNoteReady = true) }
+            }
+        }
+    }
+
+    fun cancelVoiceNote() {
+        pendingVoiceNote = null
+        _tripState.update { it.copy(voiceNoteReady = false) }
+    }
+
+    fun sendVoiceNote() {
+        val pcm = pendingVoiceNote ?: return
+        pendingVoiceNote = null
+        _tripState.update { it.copy(voiceNoteReady = false) }
+        viewModelScope.launch(Dispatchers.IO) {
             android.util.Log.d("CaravanVM", "Sending voice note ${pcm.size} bytes")
             withContext(Dispatchers.Main) {
                 sendChatMessage("🎤 Voice note")
@@ -1584,6 +1620,16 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     fun isGpsEnabled(): Boolean = locationProvider.isGpsEnabled()
     fun openLocationSettings() = locationProvider.openLocationSettings()
     fun requestImmediateLocation() = locationProvider.requestImmediateLocation()
+
+    /** After WS join succeeds, register FCM token so offline peers can be notified. */
+    private fun registerPushTokenAfterJoin() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val token = PushRegistrar.fetchToken(getApplication()) ?: return@launch
+            withContext(Dispatchers.Main) {
+                wsClient.send(CaravanProtocol.buildRegisterPush(token))
+            }
+        }
+    }
 
     /**
      * When GPS or the socket goes quiet, keep the last pin and flip connection status

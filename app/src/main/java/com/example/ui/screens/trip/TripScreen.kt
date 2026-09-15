@@ -1,6 +1,7 @@
 package com.example.ui.screens.trip
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -64,6 +65,10 @@ fun TripScreen(
     var returnToDrivingDeadline by remember { mutableLongStateOf(0L) }
     var returnToDrivingProgress by remember { mutableFloatStateOf(0f) }
     var drivingViewResetToken by remember { mutableLongStateOf(0L) }
+
+    BackHandler {
+        showLeaveConfirmDialog = true
+    }
 
     fun resetReturnToDrivingTimer() {
         if (!tripState.isNavigating) return

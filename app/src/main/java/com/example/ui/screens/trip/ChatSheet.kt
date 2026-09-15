@@ -34,8 +34,10 @@ fun ChatBottomSheet(
     var inputText by remember { mutableStateOf("") }
     val timeFormatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val scheme = MaterialTheme.colorScheme
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
+        sheetState = sheetState,
         onDismissRequest = onDismiss,
         containerColor = scheme.surface,
         dragHandle = { BottomSheetDefaults.DragHandle(color = scheme.outline) }
@@ -43,6 +45,8 @@ fun ChatBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight()
+                .imePadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Text(
@@ -58,7 +62,8 @@ fun ChatBottomSheet(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 200.dp, max = 340.dp),
+                    .weight(1f)
+                    .heightIn(min = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 reverseLayout = true
             ) {

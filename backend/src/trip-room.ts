@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
+import { sendFcmToTokens } from "./fcm";
 import {
   MAX_DISPLAY_NAME,
   PROTOCOL_VERSION,
@@ -42,9 +43,11 @@ interface MemberRuntime {
   isLeader: boolean;
 }
 
-export class TripRoom extends DurableObject {
+export class TripRoom extends DurableObject<Env> {
   private members = new Map<string, MemberRuntime>();
   private socketsByClient = new Map<string, WebSocket>();
+  /** clientId → FCM device token for offline presence pushes */
+  private fcmTokens = new Map<string, string>();
   private marks = new Map<string, MapMark>();
   private routes = new Map<
     string,
@@ -91,6 +94,11 @@ export class TripRoom extends DurableObject {
     for (const [id, m] of Object.entries(members)) {
       this.members.set(id, m);
     }
+    const tokens =
+      (await this.ctx.storage.get<Record<string, string>>("fcmTokens")) ?? {};
+    for (const [id, token] of Object.entries(tokens)) {
+      if (token) this.fcmTokens.set(id, token);
+    }
     this.initialized = true;
   }
 
@@ -114,6 +122,14 @@ export class TripRoom extends DurableObject {
       };
     }
     await this.ctx.storage.put("membersLite", lite);
+  }
+
+  private async persistFcmTokens(): Promise<void> {
+    const out: Record<string, string> = {};
+    for (const [id, token] of this.fcmTokens) {
+      out[id] = token;
+    }
+    await this.ctx.storage.put("fcmTokens", out);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -283,6 +299,9 @@ export class TripRoom extends DurableObject {
           break;
         case "audio_chunk":
           this.handleAudioChunk(ws, msg);
+          break;
+        case "register_push":
+          await this.handleRegisterPush(ws, msg);
           break;
         case "ping":
           this.send(ws, { type: "pong", version: PROTOCOL_VERSION, timestamp: nowMs() });
@@ -512,6 +531,79 @@ export class TripRoom extends DurableObject {
       timestamp: nowMs(),
       members: this.snapshotMembers(),
     });
+
+    // Wake offline members (have FCM token, no live socket) that someone came online.
+    this.ctx.waitUntil(
+      this.pushPresenceToOfflineMembers(msg.clientId, runtime.displayName),
+    );
+  }
+
+  private async handleRegisterPush(
+    ws: WebSocket,
+    msg: Extract<ReturnType<typeof parseClientMessage>, { type: "register_push" }>,
+  ): Promise<void> {
+    const att = this.getAttachment(ws);
+    if (!att.joined || !att.clientId) {
+      this.sendError(ws, "NOT_JOINED", "Join before registering push");
+      return;
+    }
+    const token = msg.fcmToken.trim();
+    if (!token) {
+      this.sendError(ws, "INVALID_MESSAGE", "fcmToken required");
+      return;
+    }
+    // One device token per client; also drop any other client sharing the same token.
+    for (const [id, existing] of this.fcmTokens) {
+      if (existing === token && id !== att.clientId) {
+        this.fcmTokens.delete(id);
+      }
+    }
+    this.fcmTokens.set(att.clientId, token);
+    await this.persistFcmTokens();
+  }
+
+  private async pushPresenceToOfflineMembers(
+    joinerId: string,
+    displayName: string,
+  ): Promise<void> {
+    if (!this.env.FCM_SERVICE_ACCOUNT_JSON) return;
+    if (!this.trip) return;
+
+    const tokens: string[] = [];
+    const tokenOwners: string[] = [];
+    for (const [clientId, token] of this.fcmTokens) {
+      if (clientId === joinerId) continue;
+      // Live WebSocket clients already get member_joined — skip them.
+      if (this.socketsByClient.has(clientId)) continue;
+      tokens.push(token);
+      tokenOwners.push(clientId);
+    }
+    if (tokens.length === 0) return;
+
+    const tripName = (this.trip.name || "").trim() || "Convoy";
+    const body = `${displayName} joined convoy “${tripName}”`;
+
+    const dead = await sendFcmToTokens(this.env.FCM_SERVICE_ACCOUNT_JSON, tokens, {
+      title: tripName,
+      body,
+      data: {
+        type: "member_online",
+        tripId: this.trip.tripId,
+        tripName,
+        clientId: joinerId,
+        displayName,
+        body,
+      },
+    });
+    if (dead.length === 0) return;
+    let changed = false;
+    for (let i = 0; i < tokens.length; i++) {
+      if (dead.includes(tokens[i]!)) {
+        this.fcmTokens.delete(tokenOwners[i]!);
+        changed = true;
+      }
+    }
+    if (changed) await this.persistFcmTokens();
   }
 
   private pruneStaleMarks(): void {
