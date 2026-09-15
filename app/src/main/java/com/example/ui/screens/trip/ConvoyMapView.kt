@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,18 +22,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -88,6 +89,11 @@ fun ConvoyMapView(
     onLongPressMark: (latitude: Double, longitude: Double) -> Unit,
     onMemberSelected: (TripMember) -> Unit,
     onMarkSelected: ((MapMark) -> Unit)? = null,
+    onDrivingViewInterrupted: () -> Unit = {},
+    showReturnToDriving: Boolean = false,
+    returnToDrivingProgress: Float = 0f,
+    onReturnToDriving: () -> Unit = {},
+    drivingViewResetToken: Long = 0L,
     /** @return true if my-location was activated / refreshed; false if system location is off. */
     onMyLocationClick: () -> Boolean = { true },
     modifier: Modifier = Modifier
@@ -109,10 +115,43 @@ fun ConvoyMapView(
     var markScreenPoints by remember { mutableStateOf<Map<String, PointF>>(emptyMap()) }
     var currentMapBearing by remember { mutableDoubleStateOf(0.0) }
     var recenterRequestedAt by remember { mutableLongStateOf(0L) }
+    var lastMapSize by remember { mutableStateOf(IntSize.Zero) }
+    var followDrivingCamera by remember { mutableStateOf(true) }
+    var movementBearing by remember { mutableStateOf<Double?>(null) }
+    var previousLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val currentDestination by rememberUpdatedState(destination)
     val currentMarks by rememberUpdatedState(marks)
     val currentLocationState by rememberUpdatedState(currentLocation)
     val isMyLocationActiveState by rememberUpdatedState(isMyLocationActive)
+    val onDrivingViewInterruptedState by rememberUpdatedState(onDrivingViewInterrupted)
+
+    LaunchedEffect(currentLocation.latitude, currentLocation.longitude) {
+        val latitude = currentLocation.latitude
+        val longitude = currentLocation.longitude
+        if (latitude == 0.0 && longitude == 0.0) return@LaunchedEffect
+
+        previousLocation?.let { (previousLatitude, previousLongitude) ->
+            val distance = ConvoyUtils.distanceMeters(
+                previousLatitude,
+                previousLongitude,
+                latitude,
+                longitude
+            )
+            if (distance >= 2.0) {
+                movementBearing = ConvoyUtils.calculateBearing(
+                    previousLatitude,
+                    previousLongitude,
+                    latitude,
+                    longitude
+                )
+            }
+        }
+        previousLocation = latitude to longitude
+    }
+
+    fun cameraPadding(map: MapLibreMap, driving: Boolean): DoubleArray =
+        if (driving) doubleArrayOf(0.0, map.height * 0.6, 0.0, 0.0)
+        else doubleArrayOf(0.0, 0.0, 0.0, 0.0)
 
     fun updateScreenLocations(map: MapLibreMap?) {
         val m = map ?: mapLibreMap ?: return
@@ -183,12 +222,34 @@ fun ConvoyMapView(
             map.uiSettings.isTiltGesturesEnabled = true
             map.uiSettings.isZoomGesturesEnabled = true
             map.uiSettings.isScrollGesturesEnabled = true
+            map.uiSettings.setAllGesturesEnabled(true)
 
             map.addOnCameraMoveListener {
                 updateScreenLocations(map)
             }
+            map.addOnCameraMoveStartedListener { reason ->
+                if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                    followDrivingCamera = false
+                    onDrivingViewInterruptedState()
+                }
+            }
+            map.addOnShoveListener(object : MapLibreMap.OnShoveListener {
+                override fun onShoveBegin(detector: org.maplibre.android.gestures.ShoveGestureDetector) {
+                    followDrivingCamera = false
+                    onDrivingViewInterruptedState()
+                }
+
+                override fun onShove(detector: org.maplibre.android.gestures.ShoveGestureDetector) = Unit
+
+                override fun onShoveEnd(detector: org.maplibre.android.gestures.ShoveGestureDetector) = Unit
+            })
             map.addOnCameraIdleListener {
                 updateScreenLocations(map)
+            }
+
+            map.addOnMapClickListener {
+                onDrivingViewInterruptedState()
+                false
             }
 
             map.addOnMapLongClickListener { point ->
@@ -236,6 +297,7 @@ fun ConvoyMapView(
             map.cameraPosition = CameraPosition.Builder()
                 .target(LatLng(currentLocation.latitude, currentLocation.longitude))
                 .zoom(14.5)
+                .padding(cameraPadding(map, false))
                 .build()
         }
     }
@@ -260,7 +322,8 @@ fun ConvoyMapView(
                             .target(LatLng(loc.latitude, loc.longitude))
                             .zoom(if (navigatingForRecenter) 16.5 else 15.0)
                             .tilt(if (navigatingForRecenter) 50.0 else 0.0)
-                            .bearing(if (navigatingForRecenter) loc.heading else 0.0)
+                            .bearing(if (navigatingForRecenter) movementBearing ?: map.cameraPosition.bearing else 0.0)
+                            .padding(cameraPadding(map, navigatingForRecenter))
                             .build()
                     ),
                     800
@@ -291,6 +354,7 @@ fun ConvoyMapView(
                         .zoom(15.0)
                         .tilt(0.0)
                         .bearing(0.0)
+                        .padding(cameraPadding(map, false))
                         .build()
                 ),
                 800
@@ -300,17 +364,43 @@ fun ConvoyMapView(
     }
 
     // Follow user location smoothly when navigating (3D tilt)
-    LaunchedEffect(isNavigating, currentLocation.latitude, currentLocation.longitude, currentLocation.heading) {
+    LaunchedEffect(isNavigating, currentLocation.latitude, currentLocation.longitude, movementBearing, followDrivingCamera) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isMapReady) return@LaunchedEffect
-        if (isNavigating && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
+        if (isNavigating && followDrivingCamera && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
             map.animateCamera(
                 CameraUpdateFactory.newCameraPosition(
                     CameraPosition.Builder()
                         .target(LatLng(currentLocation.latitude, currentLocation.longitude))
                         .zoom(16.5)
                         .tilt(50.0)
-                        .bearing(currentLocation.heading)
+                        .bearing(movementBearing ?: map.cameraPosition.bearing)
+                        .padding(cameraPadding(map, true))
+                        .build()
+                ),
+                350
+            )
+        }
+    }
+
+    LaunchedEffect(isNavigating) {
+        if (isNavigating) followDrivingCamera = true
+    }
+
+    LaunchedEffect(drivingViewResetToken) {
+        if (drivingViewResetToken == 0L) return@LaunchedEffect
+        followDrivingCamera = true
+        val map = mapLibreMap ?: return@LaunchedEffect
+        if (!isMapReady || !isNavigating) return@LaunchedEffect
+        if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
+            map.animateCamera(
+                CameraUpdateFactory.newCameraPosition(
+                    CameraPosition.Builder()
+                        .target(LatLng(currentLocation.latitude, currentLocation.longitude))
+                        .zoom(16.5)
+                        .tilt(50.0)
+                        .bearing(movementBearing ?: map.cameraPosition.bearing)
+                        .padding(cameraPadding(map, true))
                         .build()
                 ),
                 350
@@ -561,6 +651,12 @@ fun ConvoyMapView(
             factory = { mapView },
             modifier = Modifier
                 .fillMaxSize()
+                .onSizeChanged { size ->
+                    if (lastMapSize != IntSize.Zero && size != lastMapSize) {
+                        onDrivingViewInterrupted()
+                    }
+                    lastMapSize = size
+                }
                 .testTag("convoy_map_view")
         )
 
@@ -569,12 +665,7 @@ fun ConvoyMapView(
             val density = LocalDensity.current
             val screenW = constraints.maxWidth.toFloat()
             val screenH = constraints.maxHeight.toFloat()
-            val fallbackPt = PointF(screenW / 2f, screenH / 2f)
-            val pt = if (isNavigating) {
-                selfScreenPoint ?: fallbackPt
-            } else {
-                selfScreenPoint
-            }
+            val pt = selfScreenPoint
 
             if (pt != null && (isNavigating || (pt.x in -120f..(screenW + 120f) && pt.y in -120f..(screenH + 120f)))) {
                 val userColor = try {
@@ -591,7 +682,7 @@ fun ConvoyMapView(
                     initial = selfDisplayName.trim().take(1).uppercase().ifEmpty { "•" },
                     // absoluteOffset: MapLibre screen pixels are LTR; offset() mirrors X in RTL
                     modifier = Modifier.absoluteOffset {
-                        val sizeDp = 52.dp
+                        val sizeDp = if (isNavigating) 72.dp else 52.dp
                         val halfPx = with(density) { (sizeDp / 2f).toPx() }
                         IntOffset(
                             x = (pt.x - halfPx).roundToInt(),
@@ -743,23 +834,69 @@ fun ConvoyMapView(
             verticalAlignment = Alignment.Bottom
         ) {
             Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalAlignment = Alignment.Start
             ) {
-                SmallFloatingActionButton(
-                    onClick = onToggleAllMembersMute,
-                    containerColor = if (allMembersMuted) CaravanBlue else if (isDarkMode) NightSlateCard else Color.White,
-                    contentColor = if (allMembersMuted) Color.White else MaterialTheme.colorScheme.onSurface,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .testTag("map_mute_all")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        if (allMembersMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                        contentDescription = if (allMembersMuted) "Unmute all members" else "Mute all members",
-                        modifier = Modifier.size(19.dp)
-                    )
+                    SmallFloatingActionButton(
+                        onClick = onToggleAllMembersMute,
+                        containerColor = if (allMembersMuted) CaravanBlue else if (isDarkMode) NightSlateCard else Color.White,
+                        contentColor = if (allMembersMuted) Color.White else MaterialTheme.colorScheme.onSurface,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("map_mute_all")
+                    ) {
+                        Icon(
+                            if (allMembersMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            contentDescription = if (allMembersMuted) "Unmute all members" else "Mute all members",
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    if (showReturnToDriving) {
+                        val progress = returnToDrivingProgress.coerceIn(0f, 1f)
+                        Surface(
+                            onClick = onReturnToDriving,
+                            shape = RoundedCornerShape(10.dp),
+                            color = CaravanBlue,
+                            contentColor = Color.White,
+                            modifier = Modifier
+                                .width(80.dp)
+                                .height(40.dp)
+                                .testTag("btn_return_to_driving")
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(progress)
+                                        .background(Color(0xFF0284C7))
+                                )
+                                Column(
+                                    modifier = Modifier.align(Alignment.Center),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "Return to",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        lineHeight = 10.sp,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = "Driving Mode",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        lineHeight = 10.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -824,6 +961,7 @@ fun ConvoyMapView(
                         modifier = Modifier.size(22.dp)
                     )
                 }
+
             }
         }
     }
@@ -1028,29 +1166,21 @@ fun SelfPuckOrVehicleArrow(
     initial: String,
     modifier: Modifier = Modifier
 ) {
-    val density = LocalDensity.current
     val relativeHeading = ((heading - mapBearing + 360.0) % 360.0).toFloat()
+    val markerSize = if (isNavigating) 72.dp else 52.dp
+    val coreRadius = if (isNavigating) 17.dp else 12.dp
 
     Box(
         modifier = modifier
-            .size(52.dp)
-            .graphicsLayer {
-                if (isNavigating) {
-                    // Match ConvoyMapView nav camera tilt (50°) so the puck foreshortens on the road.
-                    rotationX = 50f
-                    cameraDistance = 16f * density.density
-                    transformOrigin = TransformOrigin(0.5f, 0.85f)
-                    // No shadowElevation — it draws a rectangular halo around the Box.
-                }
-            },
+            .size(markerSize),
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = size.width / 2f
             val cy = size.height / 2f
-            val coreR = 12.dp.toPx()
+            val coreR = coreRadius.toPx()
 
-            rotate(degrees = relativeHeading, pivot = Offset(cx, cy)) {
+            rotate(degrees = if (isNavigating) 0f else relativeHeading, pivot = Offset(cx, cy)) {
                 // Small forward triangle (O>) — tip points in heading direction
                 val baseY = cy - coreR - 1.dp.toPx()
                 val tri = androidx.compose.ui.graphics.Path().apply {

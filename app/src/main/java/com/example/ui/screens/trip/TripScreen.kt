@@ -45,6 +45,12 @@ fun TripScreen(
     val userProfile by viewModel.userProfile.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     val isMyLocationActive by viewModel.isMyLocationActive.collectAsState()
+    val connectionMethod = when {
+        viewModel.prefs.useAetherProxy -> "AETHER"
+        viewModel.prefs.isProxyEnabled -> "PROXY"
+        viewModel.prefs.isDnsEnabled -> "DNS"
+        else -> null
+    }
 
     var showFleetSheet by remember { mutableStateOf(false) }
     var showChatSheet by remember { mutableStateOf(false) }
@@ -52,8 +58,46 @@ fun TripScreen(
     var showLeaveConfirmDialog by remember { mutableStateOf(false) }
     var showQuickPrompts by remember { mutableStateOf(false) }
     var showInviteShare by remember { mutableStateOf(false) }
+    var memberToFocus by remember { mutableStateOf<TripMember?>(null) }
+    var fitAllRequestedAt by remember { mutableLongStateOf(0L) }
+    var showReturnToDriving by remember { mutableStateOf(false) }
+    var returnToDrivingDeadline by remember { mutableLongStateOf(0L) }
+    var returnToDrivingProgress by remember { mutableFloatStateOf(0f) }
+    var drivingViewResetToken by remember { mutableLongStateOf(0L) }
+
+    fun resetReturnToDrivingTimer() {
+        if (!tripState.isNavigating) return
+        showReturnToDriving = true
+        returnToDrivingProgress = 0f
+        returnToDrivingDeadline = System.currentTimeMillis() + 5_000L
+    }
+
+    LaunchedEffect(returnToDrivingDeadline, tripState.isNavigating) {
+        if (!tripState.isNavigating || returnToDrivingDeadline == 0L) {
+            showReturnToDriving = false
+            returnToDrivingProgress = 0f
+            return@LaunchedEffect
+        }
+        while (true) {
+            val remaining = returnToDrivingDeadline - System.currentTimeMillis()
+            if (remaining <= 0L) break
+            returnToDrivingProgress = 1f - (remaining / 5_000f).coerceIn(0f, 1f)
+            kotlinx.coroutines.delay(50L)
+        }
+        returnToDrivingProgress = 1f
+        showReturnToDriving = false
+        returnToDrivingDeadline = 0L
+        drivingViewResetToken++
+        viewModel.startNavigation()
+    }
 
     val quickPrompts = remember { viewModel.prefs.getQuickPrompts() }
+    val mutedPeerIds by viewModel.mutedPeerIds.collectAsState()
+    val remoteMemberIds = remember(tripState.members, userProfile.clientId) {
+        tripState.members.filter { it.id != userProfile.clientId }.map { it.id }
+    }
+    val allMembersMuted = remoteMemberIds.isNotEmpty() &&
+        remoteMemberIds.all { it in mutedPeerIds }
 
     // Keep display awake while driving (Google Maps / Neshan style)
     val view = LocalView.current
@@ -84,16 +128,33 @@ fun TripScreen(
             selfDisplayName = userProfile.displayName,
             marks = tripState.marks,
             sharedRoutes = tripState.sharedRoutes,
+            fitAllRequestedAt = fitAllRequestedAt,
+            allMembersMuted = allMembersMuted,
+            onToggleAllMembersMute = {
+                viewModel.setAllPeersMuted(remoteMemberIds, !allMembersMuted)
+            },
             onLongPressMark = { lat, lng ->
                 viewModel.placeMapMark(lat, lng)
             },
-            onMemberSelected = { /* Focus member */ },
+            memberToFocus = memberToFocus,
+            onMemberSelected = { memberToFocus = it },
             onMarkSelected = { mark ->
                 // Only the mark owner can start nav from the pin; others use fleet "Go to Mark"
                 if (mark.clientId == userProfile.clientId) {
                     viewModel.navigateToMemberMark(mark)
                 }
             },
+            onDrivingViewInterrupted = { resetReturnToDrivingTimer() },
+            showReturnToDriving = showReturnToDriving,
+            returnToDrivingProgress = returnToDrivingProgress,
+            onReturnToDriving = {
+                returnToDrivingDeadline = 0L
+                showReturnToDriving = false
+                returnToDrivingProgress = 0f
+                drivingViewResetToken++
+                viewModel.startNavigation()
+            },
+            drivingViewResetToken = drivingViewResetToken,
             onMyLocationClick = {
                 if (!viewModel.onMyLocationButtonClick()) {
                     Toast.makeText(
@@ -123,6 +184,7 @@ fun TripScreen(
                 inviteCode = tripState.inviteCode,
                 tripId = tripState.tripId,
                 connectionStatus = tripState.connectionStatus,
+                connectionMethod = connectionMethod,
                 memberCount = tripState.members.count { it.id != userProfile.clientId },
                 isDarkMode = isDarkMode,
                 onToggleDarkMode = { viewModel.toggleDarkMode() },
@@ -331,6 +393,7 @@ fun TripScreen(
                                 )
                             }
                         }
+
                     } else {
                         // Pre-drive: same mini Regular/Neshan/X as driving mode.
                         // Start appears only after the user picks a provider.
@@ -557,12 +620,14 @@ fun TripScreen(
                     // Record → send voice note (hold or tap-to-latch like PTT)
                     VoiceNoteButton(
                         isRecording = tripState.voiceNoteRecording,
+                        isReadyToSend = tripState.voiceNoteReady,
                         audioAmplitude = tripState.audioAmplitude,
                         enabled = tripState.pttState != PttState.TRANSMITTING &&
                             tripState.pttState != PttState.REQUESTING,
                         onToggle = { viewModel.toggleVoiceNote() },
                         onStart = { viewModel.startVoiceNote() },
-                        onRelease = { viewModel.releaseVoiceNote() }
+                        onRelease = { viewModel.finishVoiceNoteRecording() },
+                        onCancel = { viewModel.cancelVoiceNote() }
                     )
 
                     Spacer(modifier = Modifier.width(10.dp))
@@ -584,8 +649,15 @@ fun TripScreen(
                 userLocation = currentLocation,
                 sharedRoutes = tripState.sharedRoutes,
                 marks = tripState.marks,
+                mutedMemberIds = mutedPeerIds,
+                allMuted = allMembersMuted,
+                onFitAllMembers = { fitAllRequestedAt = System.currentTimeMillis() },
+                onToggleAllMute = {
+                    viewModel.setAllPeersMuted(remoteMemberIds, !allMembersMuted)
+                },
+                onToggleMemberMute = viewModel::togglePeerMute,
                 onDismiss = { showFleetSheet = false },
-                onSelectMember = { /* center */ },
+                onSelectMember = { memberToFocus = it },
                 onFollowMemberRoute = { memberId ->
                     viewModel.followSharedRoute(memberId)
                 },
