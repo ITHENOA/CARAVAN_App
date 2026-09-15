@@ -55,6 +55,7 @@ import org.maplibre.android.annotations.PolylineOptions
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import kotlin.math.roundToInt
@@ -80,6 +81,10 @@ fun ConvoyMapView(
     selfDisplayName: String = "",
     marks: Map<String, MapMark> = emptyMap(),
     sharedRoutes: Map<String, SharedRoute> = emptyMap(),
+    fitAllRequestedAt: Long = 0L,
+    allMembersMuted: Boolean = false,
+    onToggleAllMembersMute: () -> Unit = {},
+    memberToFocus: TripMember? = null,
     onLongPressMark: (latitude: Double, longitude: Double) -> Unit,
     onMemberSelected: (TripMember) -> Unit,
     onMarkSelected: ((MapMark) -> Unit)? = null,
@@ -310,6 +315,46 @@ fun ConvoyMapView(
                 ),
                 350
             )
+        }
+    }
+
+    LaunchedEffect(memberToFocus?.id, isMapReady) {
+        val member = memberToFocus ?: return@LaunchedEffect
+        val map = mapLibreMap ?: return@LaunchedEffect
+        val memberLat = member.latitude ?: return@LaunchedEffect
+        val memberLng = member.longitude ?: return@LaunchedEffect
+        val selfLat = currentLocation.latitude
+        val selfLng = currentLocation.longitude
+        if ((selfLat == 0.0 && selfLng == 0.0) || (memberLat == 0.0 && memberLng == 0.0)) return@LaunchedEffect
+
+        val bounds = LatLngBounds.Builder()
+            .include(LatLng(selfLat, selfLng))
+            .include(LatLng(memberLat, memberLng))
+            .build()
+        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 120), 800)
+    }
+
+    LaunchedEffect(fitAllRequestedAt, isMapReady) {
+        if (fitAllRequestedAt == 0L || !isMapReady) return@LaunchedEffect
+        val map = mapLibreMap ?: return@LaunchedEffect
+        val points = buildList {
+            if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
+                add(LatLng(currentLocation.latitude, currentLocation.longitude))
+            }
+            members.forEach { member ->
+                if (member.latitude != null && member.longitude != null) {
+                    add(LatLng(member.latitude, member.longitude))
+                }
+            }
+        }
+        if (points.isEmpty()) return@LaunchedEffect
+        if (points.size == 1) {
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15.0), 700)
+        } else {
+            val bounds = LatLngBounds.Builder().also { builder ->
+                points.forEach(builder::include)
+            }.build()
+            map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 120), 800)
         }
     }
 
@@ -697,7 +742,26 @@ fun ConvoyMapView(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom
         ) {
-            Spacer(modifier = Modifier.weight(1f))
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                SmallFloatingActionButton(
+                    onClick = onToggleAllMembersMute,
+                    containerColor = if (allMembersMuted) CaravanBlue else if (isDarkMode) NightSlateCard else Color.White,
+                    contentColor = if (allMembersMuted) Color.White else MaterialTheme.colorScheme.onSurface,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .testTag("map_mute_all")
+                ) {
+                    Icon(
+                        if (allMembersMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                        contentDescription = if (allMembersMuted) "Unmute all members" else "Mute all members",
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
 
             // Right: Zoom In, Zoom Out, and Recenter
             Column(
