@@ -122,6 +122,7 @@ fun TripScreen(
             isCalculatingRoute = tripState.isCalculatingRoute,
             isDarkMode = isDarkMode,
             isNavigating = tripState.isNavigating,
+            drivingViewZoom = viewModel.prefs.drivingViewZoom,
             isMyLocationActive = isMyLocationActive,
             selfColorHex = userProfile.avatarColor,
             selfClientId = userProfile.clientId,

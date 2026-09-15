@@ -22,8 +22,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -76,6 +78,7 @@ fun ConvoyMapView(
     isCalculatingRoute: Boolean,
     isDarkMode: Boolean,
     isNavigating: Boolean = false,
+    drivingViewZoom: Float = 16.5f,
     isMyLocationActive: Boolean = false,
     selfColorHex: String = "#0EA5E9",
     selfClientId: String = "",
@@ -114,6 +117,7 @@ fun ConvoyMapView(
     var selfScreenPoint by remember { mutableStateOf<PointF?>(null) }
     var markScreenPoints by remember { mutableStateOf<Map<String, PointF>>(emptyMap()) }
     var currentMapBearing by remember { mutableDoubleStateOf(0.0) }
+    var currentMapTilt by remember { mutableDoubleStateOf(0.0) }
     var recenterRequestedAt by remember { mutableLongStateOf(0L) }
     var lastMapSize by remember { mutableStateOf(IntSize.Zero) }
     var followDrivingCamera by remember { mutableStateOf(true) }
@@ -157,6 +161,7 @@ fun ConvoyMapView(
         val m = map ?: mapLibreMap ?: return
         try {
             currentMapBearing = m.cameraPosition.bearing
+            currentMapTilt = m.cameraPosition.tilt
             val dest = currentDestination
             if (dest != null) {
                 destScreenPoint = m.projection.toScreenLocation(LatLng(dest.latitude, dest.longitude))
@@ -320,7 +325,7 @@ fun ConvoyMapView(
                     CameraUpdateFactory.newCameraPosition(
                         CameraPosition.Builder()
                             .target(LatLng(loc.latitude, loc.longitude))
-                            .zoom(if (navigatingForRecenter) 16.5 else 15.0)
+                            .zoom(if (navigatingForRecenter) drivingViewZoom.toDouble() else 15.0)
                             .tilt(if (navigatingForRecenter) 50.0 else 0.0)
                             .bearing(if (navigatingForRecenter) movementBearing ?: map.cameraPosition.bearing else 0.0)
                             .padding(cameraPadding(map, navigatingForRecenter))
@@ -372,7 +377,7 @@ fun ConvoyMapView(
                 CameraUpdateFactory.newCameraPosition(
                     CameraPosition.Builder()
                         .target(LatLng(currentLocation.latitude, currentLocation.longitude))
-                        .zoom(16.5)
+                        .zoom(drivingViewZoom.toDouble())
                         .tilt(50.0)
                         .bearing(movementBearing ?: map.cameraPosition.bearing)
                         .padding(cameraPadding(map, true))
@@ -397,7 +402,7 @@ fun ConvoyMapView(
                 CameraUpdateFactory.newCameraPosition(
                     CameraPosition.Builder()
                         .target(LatLng(currentLocation.latitude, currentLocation.longitude))
-                        .zoom(16.5)
+                        .zoom(drivingViewZoom.toDouble())
                         .tilt(50.0)
                         .bearing(movementBearing ?: map.cameraPosition.bearing)
                         .padding(cameraPadding(map, true))
@@ -678,11 +683,12 @@ fun ConvoyMapView(
                     isNavigating = isNavigating,
                     heading = currentLocation.heading,
                     mapBearing = currentMapBearing,
+                    mapTilt = currentMapTilt,
                     userColor = userColor,
                     initial = selfDisplayName.trim().take(1).uppercase().ifEmpty { "•" },
                     // absoluteOffset: MapLibre screen pixels are LTR; offset() mirrors X in RTL
                     modifier = Modifier.absoluteOffset {
-                        val sizeDp = if (isNavigating) 72.dp else 52.dp
+                        val sizeDp = 52.dp
                         val halfPx = with(density) { (sizeDp / 2f).toPx() }
                         IntOffset(
                             x = (pt.x - halfPx).roundToInt(),
@@ -1162,17 +1168,26 @@ fun SelfPuckOrVehicleArrow(
     isNavigating: Boolean,
     heading: Double,
     mapBearing: Double,
+    mapTilt: Double,
     userColor: Color,
     initial: String,
     modifier: Modifier = Modifier
 ) {
+    val density = LocalDensity.current
     val relativeHeading = ((heading - mapBearing + 360.0) % 360.0).toFloat()
-    val markerSize = if (isNavigating) 72.dp else 52.dp
-    val coreRadius = if (isNavigating) 17.dp else 12.dp
+    val markerSize = 52.dp
+    val coreRadius = 12.dp
 
     Box(
         modifier = modifier
-            .size(markerSize),
+            .size(markerSize)
+            .graphicsLayer {
+                if (isNavigating) {
+                    rotationX = mapTilt.toFloat()
+                    cameraDistance = 16f * density.density
+                    transformOrigin = TransformOrigin(0.5f, 0.85f)
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {

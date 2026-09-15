@@ -34,6 +34,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_SOUND_ENABLED = "sound_enabled"
         private const val KEY_MESSAGE_SOUND_ENABLED = "message_sound_enabled"
         private const val KEY_HAPTICS_ENABLED = "haptics_enabled"
+        private const val KEY_DRIVING_VIEW_ZOOM = "driving_view_zoom"
         private const val KEY_QUICK_PROMPTS = "quick_prompts"
         private const val KEY_IS_DARK_MODE = "is_dark_mode"
         private const val KEY_NESHAN_API_KEY = "neshan_api_key"
@@ -208,6 +209,10 @@ class PreferencesManager(context: Context) {
     var isHapticsEnabled: Boolean
         get() = prefs.getBoolean(KEY_HAPTICS_ENABLED, true)
         set(value) = prefs.edit().putBoolean(KEY_HAPTICS_ENABLED, value).apply()
+
+    var drivingViewZoom: Float
+        get() = prefs.getFloat(KEY_DRIVING_VIEW_ZOOM, 16.5f)
+        set(value) = prefs.edit().putFloat(KEY_DRIVING_VIEW_ZOOM, value.coerceIn(15.0f, 18.0f)).apply()
 
     var isDarkMode: Boolean
         get() = prefs.getBoolean(KEY_IS_DARK_MODE, false) // Default to clean Light mode so user can see light mode immediately

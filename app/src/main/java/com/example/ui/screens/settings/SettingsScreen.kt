@@ -55,6 +55,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -94,6 +95,7 @@ fun SettingsScreen(
     var soundEnabled by remember { mutableStateOf(prefs.isSoundEnabled) }
     var messageSoundEnabled by remember { mutableStateOf(prefs.isMessageSoundEnabled) }
     var hapticsEnabled by remember { mutableStateOf(prefs.isHapticsEnabled) }
+    var drivingViewZoom by remember { mutableStateOf(prefs.drivingViewZoom) }
     val isDarkMode by viewModel.isDarkMode.collectAsState()
     var neshanApiKey by remember { mutableStateOf(prefs.neshanApiKey) }
     var proxyEnabled by remember { mutableStateOf(prefs.isProxyEnabled) }
@@ -304,6 +306,44 @@ fun SettingsScreen(
                         }
                     )
                 }
+            }
+
+            SettingsExpandableCard(
+                title = "Driving View",
+                subtitle = "Zoom ${"%.1f".format(drivingViewZoom)}x",
+                icon = Icons.Default.DirectionsCar,
+                iconTint = CaravanBlue
+            ) {
+                Text(
+                    "Adjust how close the map appears while Driving View is active.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Map distance", fontWeight = FontWeight.Medium)
+                    Text(
+                        "${"%.1f".format(drivingViewZoom)}x",
+                        color = CaravanBlue,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Slider(
+                    value = drivingViewZoom,
+                    onValueChange = {
+                        drivingViewZoom = it
+                        prefs.drivingViewZoom = it
+                    },
+                    valueRange = 15.0f..18.0f,
+                    steps = 5,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_driving_view_zoom")
+                )
             }
 
             SettingsExpandableCard(
@@ -802,7 +842,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    "Built by ITHENOA · Version 3.0.0",
+                    "Built by ITHENOA · Version 3.0.3",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
