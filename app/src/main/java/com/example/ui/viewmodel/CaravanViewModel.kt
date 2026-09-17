@@ -1245,28 +1245,71 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
     fun launchNeshanOrExternalNav(context: android.content.Context) {
         val dest = _tripState.value.destination ?: return
+        val lat = dest.latitude
+        val lng = dest.longitude
+        val label = dest.label ?: "Destination"
+
+        // 1. Try launching Neshan App via nshn scheme
         try {
-            // Try launching Neshan App first (uri scheme nshn:route?destination=lat,lng)
             val neshanIntent = android.content.Intent(
                 android.content.Intent.ACTION_VIEW,
-                android.net.Uri.parse("nshn:route?destination=${dest.latitude},${dest.longitude}")
+                android.net.Uri.parse("nshn:route?destination=$lat,$lng")
             ).apply {
                 setPackage("org.neshan.maps.and.navi")
                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(neshanIntent)
+            return
         } catch (_: Exception) {
-            // Fallback to standard geo intent (works with Google Maps, Balad, Waze, etc.)
+            // ignore and try next
+        }
+
+        // 2. Try launching Neshan App via geo URI targeted to Neshan package
+        try {
+            val neshanGeoIntent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("geo:$lat,$lng?q=$lat,$lng(${android.net.Uri.encode(label)})")
+            ).apply {
+                setPackage("org.neshan.maps.and.navi")
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(neshanGeoIntent)
+            return
+        } catch (_: Exception) {
+            // ignore and try next
+        }
+
+        // 3. Fallback to generic geo intent (works with Google Maps, Balad, Waze, etc.)
+        try {
+            val geoIntent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("geo:$lat,$lng?q=$lat,$lng(${android.net.Uri.encode(label)})")
+            ).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(geoIntent)
+        } catch (_: Exception) {
+            // 4. If no map app, try opening Neshan in Cafe Bazaar or Play Store
             try {
-                val geoIntent = android.content.Intent(
+                val bazaarIntent = android.content.Intent(
                     android.content.Intent.ACTION_VIEW,
-                    android.net.Uri.parse("geo:${dest.latitude},${dest.longitude}?q=${dest.latitude},${dest.longitude}(${android.net.Uri.encode(dest.label ?: "Destination")})")
+                    android.net.Uri.parse("bazaar://details?id=org.neshan.maps.and.navi")
                 ).apply {
                     addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(geoIntent)
+                context.startActivity(bazaarIntent)
             } catch (_: Exception) {
-                android.widget.Toast.makeText(context, "No map application found", android.widget.Toast.LENGTH_SHORT).show()
+                try {
+                    val marketIntent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("market://details?id=org.neshan.maps.and.navi")
+                    ).apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(marketIntent)
+                } catch (_: Exception) {
+                    android.widget.Toast.makeText(context, "No map application found", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }

@@ -842,7 +842,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    "Built by ITHENOA · Version 3.0.6",
+                    "Built by ITHENOA · Version 3.0.7",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

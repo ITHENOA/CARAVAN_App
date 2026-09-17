@@ -16,6 +16,16 @@
 
     <queries>
         <package android:name="com.termux" />
+        <package android:name="org.neshan.maps.and.navi" />
+        <package android:name="com.farsitel.bazaar" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="nshn" />
+        </intent>
     </queries>
 
     <application

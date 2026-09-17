@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -329,7 +330,7 @@ fun TripScreen(
                             // 3. Little button for regular nav (no text)
                             Surface(
                                 onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.OSRM) },
-                                shape = RoundedCornerShape(8.dp),
+                                shape = CircleShape,
                                 color = if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
                                 border = BorderStroke(1.dp, if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier
@@ -359,7 +360,7 @@ fun TripScreen(
                             // 4. Little button for neshan nav (no text)
                             Surface(
                                 onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.NESHAN) },
-                                shape = RoundedCornerShape(8.dp),
+                                shape = CircleShape,
                                 color = if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.surfaceVariant,
                                 border = BorderStroke(1.dp, if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier
@@ -384,9 +385,31 @@ fun TripScreen(
                                 }
                             }
 
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // 5. Little circular button to open marked destination in Neshan app
+                            Surface(
+                                onClick = { viewModel.launchNeshanOrExternalNav(context) },
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("btn_open_neshan_app_mini")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.OpenInNew,
+                                        contentDescription = "Open in Neshan App",
+                                        tint = neshanGreen,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
                             Spacer(modifier = Modifier.width(4.dp))
 
-                            // 5. Cross close button "x"
+                            // 6. Cross close button "x"
                             IconButton(
                                 onClick = { viewModel.stopNavigation() },
                                 modifier = Modifier.size(32.dp)
@@ -441,7 +464,7 @@ fun TripScreen(
 
                                 Surface(
                                     onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.OSRM) },
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = CircleShape,
                                     color = if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
                                     border = BorderStroke(1.dp, if (isOsrmActive) CaravanBlue else MaterialTheme.colorScheme.outlineVariant),
                                     modifier = Modifier
@@ -470,7 +493,7 @@ fun TripScreen(
 
                                 Surface(
                                     onClick = { viewModel.calculateRouteWithProvider(RoutingProvider.NESHAN) },
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = CircleShape,
                                     color = if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.surfaceVariant,
                                     border = BorderStroke(1.dp, if (isNeshanActive) neshanGreen else MaterialTheme.colorScheme.outlineVariant),
                                     modifier = Modifier
@@ -492,6 +515,28 @@ fun TripScreen(
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                // Little circular button to open marked destination in Neshan app
+                                Surface(
+                                    onClick = { viewModel.launchNeshanOrExternalNav(context) },
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .testTag("btn_open_neshan_app_mini")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.OpenInNew,
+                                            contentDescription = "Open in Neshan App",
+                                            tint = neshanGreen,
+                                            modifier = Modifier.size(16.dp)
+                                        )
                                     }
                                 }
 
