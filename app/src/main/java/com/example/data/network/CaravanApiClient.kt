@@ -345,4 +345,111 @@ class CaravanApiClient(
         }
         RouteResult(points, distM, estSecs)
     }
+
+    suspend fun searchPlaces(
+        context: android.content.Context,
+        query: String,
+        userLat: Double,
+        userLng: Double
+    ): List<SearchPlaceItem> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return@withContext emptyList()
+        val results = mutableListOf<SearchPlaceItem>()
+        val hasUserLoc = (userLat != 0.0 || userLng != 0.0) && !userLat.isNaN() && !userLng.isNaN()
+
+        // 1. Android Geocoder
+        try {
+            if (android.location.Geocoder.isPresent()) {
+                val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+                @Suppress("DEPRECATION")
+                val addresses = geocoder.getFromLocationName(trimmed, 8)
+                addresses?.forEach { addr ->
+                    val name = addr.featureName ?: addr.thoroughfare ?: addr.locality ?: trimmed
+                    val details = listOfNotNull(
+                        addr.thoroughfare,
+                        addr.subLocality,
+                        addr.locality,
+                        addr.adminArea,
+                        addr.countryName
+                    ).distinct().joinToString(", ")
+                    val dist = if (hasUserLoc) {
+                        val d = FloatArray(1)
+                        android.location.Location.distanceBetween(userLat, userLng, addr.latitude, addr.longitude, d)
+                        d[0]
+                    } else null
+                    results.add(
+                        SearchPlaceItem(
+                            name = name,
+                            address = if (details.isNotBlank()) details else "${addr.latitude}, ${addr.longitude}",
+                            latitude = addr.latitude,
+                            longitude = addr.longitude,
+                            distanceMeters = dist
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("PlaceSearch", "Geocoder failed: ${e.message}")
+        }
+
+        // 2. OpenStreetMap Nominatim Fallback
+        if (results.size < 4) {
+            try {
+                val encoded = java.net.URLEncoder.encode(trimmed, "UTF-8")
+                val url = "https://nominatim.openstreetmap.org/search?q=$encoded&format=json&limit=10&addressdetails=1"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "CaravanApp/3.2 (Android; Caravan Convoy Navigation)")
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    val array = org.json.JSONArray(body)
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val displayName = obj.optString("display_name", "")
+                        val lat = obj.optDouble("lat", 0.0)
+                        val lon = obj.optDouble("lon", 0.0)
+                        if (lat != 0.0 && lon != 0.0) {
+                            val parts = displayName.split(",")
+                            val title = parts.firstOrNull()?.trim() ?: trimmed
+                            val desc = parts.drop(1).joinToString(",").trim()
+                            val dist = if (hasUserLoc) {
+                                val d = FloatArray(1)
+                                android.location.Location.distanceBetween(userLat, userLng, lat, lon, d)
+                                d[0]
+                            } else null
+                            if (results.none { Math.abs(it.latitude - lat) < 0.0005 && Math.abs(it.longitude - lon) < 0.0005 }) {
+                                results.add(
+                                    SearchPlaceItem(
+                                        name = title,
+                                        address = if (desc.isNotBlank()) desc else displayName,
+                                        latitude = lat,
+                                        longitude = lon,
+                                        distanceMeters = dist
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("PlaceSearch", "Nominatim search failed: ${e.message}")
+            }
+        }
+
+        if (hasUserLoc) {
+            results.sortedBy { it.distanceMeters ?: Float.MAX_VALUE }
+        } else {
+            results
+        }
+    }
 }
+
+data class SearchPlaceItem(
+    val name: String,
+    val address: String,
+    val latitude: Double,
+    val longitude: Double,
+    val distanceMeters: Float? = null
+)

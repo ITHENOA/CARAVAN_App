@@ -344,6 +344,17 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage {
         seq,
       };
     }
+    case "kick_member": {
+      const targetClientId = requireString(obj, "targetClientId").slice(0, 128);
+      const leaderToken = typeof obj.leaderToken === "string" ? obj.leaderToken.slice(0, 256) : undefined;
+      return {
+        type: "kick_member",
+        version: PROTOCOL_VERSION,
+        timestamp,
+        targetClientId,
+        leaderToken,
+      };
+    }
     case "register_push": {
       const fcmToken = requireString(obj, "fcmToken").slice(0, 4096);
       return {

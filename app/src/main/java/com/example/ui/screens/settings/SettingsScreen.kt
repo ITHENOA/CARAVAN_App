@@ -8,6 +8,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -72,11 +73,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
+import com.example.data.local.PreferencesManager
 import com.example.data.network.AetherHelper
 import com.example.data.network.DnsPresets
+import com.example.data.update.UpdateDownloadState
+import com.example.data.update.UpdateInfo
 import com.example.ui.theme.CaravanBlue
 import com.example.ui.theme.CaravanEmerald
 import com.example.ui.viewmodel.CaravanViewModel
+import com.example.util.ConvoyUtils
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -96,7 +105,10 @@ fun SettingsScreen(
     var messageSoundEnabled by remember { mutableStateOf(prefs.isMessageSoundEnabled) }
     var hapticsEnabled by remember { mutableStateOf(prefs.isHapticsEnabled) }
     var drivingViewZoom by remember { mutableStateOf(prefs.drivingViewZoom) }
+    var drivingMarkerPosition by remember { mutableStateOf(prefs.drivingMarkerPosition) }
+    var convoyFramingRadius by remember { mutableStateOf(prefs.convoyFramingRadiusMeters) }
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val mapTheme by viewModel.mapTheme.collectAsState()
     var neshanApiKey by remember { mutableStateOf(prefs.neshanApiKey) }
     var proxyEnabled by remember { mutableStateOf(prefs.isProxyEnabled) }
     var proxyHost by remember { mutableStateOf(prefs.proxyHost) }
@@ -202,10 +214,10 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("Dark Cockpit Theme", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)
                         Text(
-                            if (isDarkMode) "Night high-contrast dark theme" else "Clean daylight theme",
+                            if (isDarkMode) "Night high-contrast cockpit & dark map" else "Clean daylight cockpit & light map",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp
                         )
@@ -218,6 +230,56 @@ fun SettingsScreen(
                             checkedTrackColor = CaravanBlue
                         )
                     )
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(vertical = 10.dp)
+                )
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("Map Style (حالت نقشه)", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)
+                    Text(
+                        when (mapTheme) {
+                            PreferencesManager.MAP_THEME_DARK -> "Dark Night Map (حالت دارک نقشه)"
+                            PreferencesManager.MAP_THEME_LIGHT -> "Light Day Map (حالت روشن نقشه)"
+                            else -> "Auto (همگام با تم برنامه و حالت شب)"
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            PreferencesManager.MAP_THEME_AUTO to "Auto (تم)",
+                            PreferencesManager.MAP_THEME_DARK to "Dark (دارک)",
+                            PreferencesManager.MAP_THEME_LIGHT to "Light (روشن)"
+                        ).forEach { (mode, label) ->
+                            val selected = mapTheme == mode
+                            Surface(
+                                onClick = { viewModel.setMapTheme(mode) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (selected) CaravanBlue else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 HorizontalDivider(
@@ -309,23 +371,25 @@ fun SettingsScreen(
             }
 
             SettingsExpandableCard(
-                title = "Driving View",
-                subtitle = "Zoom ${"%.1f".format(drivingViewZoom)}x",
+                title = "Driving & Map Framing",
+                subtitle = "Zoom ${"%.1f".format(drivingViewZoom)}x • Framing ${ConvoyUtils.formatFramingRadius(convoyFramingRadius)}",
                 icon = Icons.Default.DirectionsCar,
                 iconTint = CaravanBlue
             ) {
                 Text(
-                    "Adjust how close the map appears while Driving View is active.",
+                    "Adjust camera zoom, vehicle marker position, and the dynamic framing radius for online convoy members.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Slider 1: Camera Zoom / Distance
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Map distance", fontWeight = FontWeight.Medium)
+                    Text("Camera distance (Zoom)", fontWeight = FontWeight.Medium)
                     Text(
                         "${"%.1f".format(drivingViewZoom)}x",
                         color = CaravanBlue,
@@ -336,14 +400,128 @@ fun SettingsScreen(
                     value = drivingViewZoom,
                     onValueChange = {
                         drivingViewZoom = it
-                        prefs.drivingViewZoom = it
+                        viewModel.updateDrivingViewZoom(it)
                     },
-                    valueRange = 15.0f..18.0f,
-                    steps = 5,
+                    valueRange = 14.0f..18.5f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("settings_driving_view_zoom")
                 )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Far (Wide view)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Close (Detail)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Slider 2: Vehicle Marker Position on Screen
+                val rearPercent = ((1f - drivingMarkerPosition) * 100).toInt()
+                val positionDescriptor = when {
+                    drivingMarkerPosition <= 0.58f -> "Centered (${rearPercent}% rear view)"
+                    drivingMarkerPosition <= 0.72f -> "Balanced (${rearPercent}% rear view)"
+                    else -> "Lower (${rearPercent}% rear view)"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Vehicle screen position", fontWeight = FontWeight.Medium)
+                    Text(
+                        positionDescriptor,
+                        color = CaravanBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Moves your vehicle marker higher up to reveal more road and convoy members behind you, or lower for a wider view ahead.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Slider(
+                    value = drivingMarkerPosition,
+                    onValueChange = {
+                        drivingMarkerPosition = it
+                        viewModel.updateDrivingMarkerPosition(it)
+                    },
+                    valueRange = 0.50f..0.85f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_driving_marker_position")
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Higher (See behind you)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Lower (See ahead)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Slider 3: Dynamic Convoy Framing Radius
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Convoy framing distance", fontWeight = FontWeight.Medium)
+                    Text(
+                        ConvoyUtils.formatFramingRadius(convoyFramingRadius),
+                        color = CaravanBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Specifies how far the map framing button reaches to include online members around you. Drag all the way to the right to frame all online members regardless of distance.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                val framingStepIndex = remember(convoyFramingRadius) {
+                    val idx = ConvoyUtils.CONVOY_FRAMING_RADIUS_STEPS.indexOf(convoyFramingRadius)
+                    if (idx >= 0) idx.toFloat() else (ConvoyUtils.CONVOY_FRAMING_RADIUS_STEPS.size - 1).toFloat()
+                }
+                Slider(
+                    value = framingStepIndex,
+                    onValueChange = { stepVal ->
+                        val stepIdx = kotlin.math.round(stepVal).toInt().coerceIn(0, ConvoyUtils.CONVOY_FRAMING_RADIUS_STEPS.lastIndex)
+                        val newRadius = ConvoyUtils.CONVOY_FRAMING_RADIUS_STEPS[stepIdx]
+                        convoyFramingRadius = newRadius
+                        viewModel.updateConvoyFramingRadiusMeters(newRadius)
+                    },
+                    valueRange = 0f..(ConvoyUtils.CONVOY_FRAMING_RADIUS_STEPS.size - 1).toFloat(),
+                    steps = ConvoyUtils.CONVOY_FRAMING_RADIUS_STEPS.size - 2,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_convoy_framing_radius")
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("500 m", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("10 km", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("All Convoy", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
 
             SettingsExpandableCard(
@@ -832,6 +1010,216 @@ fun SettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // App Updates (Cloudflare Worker & Differential Delta Patching)
+            val updateState by viewModel.updateState.collectAsState()
+            SettingsExpandableCard(
+                title = "App Updates",
+                subtitle = "Check for delta patches and new releases",
+                icon = Icons.Default.SystemUpdate,
+                iconTint = CaravanBlue,
+                initiallyExpanded = true
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Installed version: v${com.example.BuildConfig.VERSION_NAME} (code ${com.example.BuildConfig.VERSION_CODE})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Server updates endpoint: ${prefs.apiBaseUrl}/api/version",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    when (val state = updateState) {
+                        is UpdateDownloadState.Idle -> {
+                            Button(
+                                onClick = { viewModel.checkForAppUpdates() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("check_for_updates_button"),
+                                colors = ButtonDefaults.buttonColors(containerColor = CaravanBlue)
+                            ) {
+                                Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Check for Updates")
+                            }
+                        }
+                        is UpdateDownloadState.Checking -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = CaravanBlue)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text("Connecting to server and checking version...", fontSize = 13.sp)
+                            }
+                        }
+                        is UpdateDownloadState.UpToDate -> {
+                            Surface(
+                                color = CaravanEmerald.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CaravanEmerald, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        "You are using the latest version of Caravan.",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { viewModel.checkForAppUpdates() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Check Again")
+                            }
+                        }
+                        is UpdateDownloadState.Available -> {
+                            val info = state.info
+                            Surface(
+                                color = CaravanBlue.copy(alpha = 0.08f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, CaravanBlue.copy(alpha = 0.3f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "Version ${info.versionName} available",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = CaravanBlue
+                                        )
+                                        if (info.isPatchAvailable) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Surface(
+                                                color = CaravanEmerald,
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text(
+                                                    "DELTA PATCH",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        info.changelog,
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    if (info.isPatchAvailable) {
+                                        Text(
+                                            "Smart Delta Update: Only changes will be downloaded, saving data and time.",
+                                            fontSize = 11.sp,
+                                            color = CaravanEmerald
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                    }
+                                    Button(
+                                        onClick = { viewModel.downloadAndInstallUpdate(info) },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("download_update_button"),
+                                        colors = ButtonDefaults.buttonColors(containerColor = CaravanBlue)
+                                    ) {
+                                        Text(if (info.isPatchAvailable) "Download & Apply Delta Patch" else "Download & Install Update")
+                                    }
+                                }
+                            }
+                        }
+                        is UpdateDownloadState.Downloading -> {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(state.statusText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    Text("${state.progressPercent}%", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CaravanBlue)
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LinearProgressIndicator(
+                                    progress = { state.progressPercent / 100f },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp),
+                                    color = CaravanBlue,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+                        }
+                        is UpdateDownloadState.ReadyToInstall -> {
+                            Surface(
+                                color = CaravanEmerald.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text("Package downloaded and ready for installation.", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Button(
+                                        onClick = { viewModel.updateManager.promptInstall(state.apkFile) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = CaravanEmerald)
+                                    ) {
+                                        Text("Open Package Installer")
+                                    }
+                                }
+                            }
+                        }
+                        is UpdateDownloadState.Error -> {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        "Update Error: ${state.message}",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        OutlinedButton(onClick = { viewModel.dismissUpdateState() }) {
+                                            Text("Dismiss")
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Button(onClick = { viewModel.checkForAppUpdates() }) {
+                                            Text("Retry")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -842,7 +1230,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    "Built by ITHENOA · Version 3.0.7",
+                    "Built by ITHENOA · Version ${com.example.BuildConfig.VERSION_NAME}",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

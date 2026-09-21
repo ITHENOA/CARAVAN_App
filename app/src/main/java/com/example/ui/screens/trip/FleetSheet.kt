@@ -127,17 +127,17 @@ fun ConvoyTopBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Set Destination Button
+                    // Search Places Button
                     IconButton(
                         onClick = onOpenDestinationDialog,
                         modifier = Modifier
                             .size(34.dp)
-                            .testTag("open_destination_dialog_button")
+                            .testTag("open_search_dialog_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.AddLocationAlt,
-                            contentDescription = "Set Destination",
-                            tint = CaravanAmber,
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Places",
+                            tint = CaravanBlue,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -288,6 +288,8 @@ fun FleetBottomSheet(
     onFitAllMembers: () -> Unit = {},
     sharedRoutes: Map<String, com.example.data.model.SharedRoute> = emptyMap(),
     marks: Map<String, MapMark> = emptyMap(),
+    isLeader: Boolean = false,
+    onKickMember: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onSelectMember: (TripMember) -> Unit,
     onFollowMemberRoute: (String) -> Unit = {},
@@ -354,6 +356,8 @@ fun FleetBottomSheet(
                         hasSharedRoute = hasSharedRoute,
                         hasMark = memberMark != null,
                         isMuted = mutedMemberIds.contains(member.id),
+                        canKick = isLeader && !member.isLeader,
+                        onKick = { onKickMember(member.id) },
                         onToggleMute = { onToggleMemberMute(member.id) },
                         onFollowRoute = {
                             onFollowMemberRoute(member.id)
@@ -382,11 +386,38 @@ fun FleetMemberRow(
     hasSharedRoute: Boolean = false,
     hasMark: Boolean = false,
     isMuted: Boolean = false,
+    canKick: Boolean = false,
+    onKick: () -> Unit = {},
     onToggleMute: () -> Unit = {},
     onFollowRoute: () -> Unit = {},
     onNavigateToMark: () -> Unit = {},
     onClick: () -> Unit
 ) {
+    var showKickConfirm by remember { mutableStateOf(false) }
+
+    if (showKickConfirm) {
+        AlertDialog(
+            onDismissRequest = { showKickConfirm = false },
+            title = { Text("Remove Member") },
+            text = { Text("Are you sure you want to remove ${member.displayName} from this convoy?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showKickConfirm = false
+                        onKick()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CaravanCrimson)
+                ) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showKickConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
     val mColor = try {
         Color(android.graphics.Color.parseColor(member.avatarColor ?: "#10B981"))
     } catch (_: Exception) {
@@ -460,7 +491,8 @@ fun FleetMemberRow(
                     }
                 }
 
-                val timeAgo = ConvoyUtils.formatTimeAgo(member.lastLocationAt ?: member.lastSeenAt)
+                val latestTimestamp = maxOf(member.lastLocationAt ?: 0L, member.lastSeenAt)
+                val timeAgo = if (member.connectionStatus == MemberConnectionStatus.CONNECTED) null else ConvoyUtils.formatTimeAgo(latestTimestamp)
                 val statusLine = when {
                     member.connectionStatus == MemberConnectionStatus.OFFLINE && timeAgo != null ->
                         "Offline · $timeAgo"
@@ -524,6 +556,22 @@ fun FleetMemberRow(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Go to Mark", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
+                }
+            }
+
+            if (canKick) {
+                IconButton(
+                    onClick = { showKickConfirm = true },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("kick_member_button_${member.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PersonRemove,
+                        contentDescription = "Remove member from convoy",
+                        tint = CaravanCrimson,
+                        modifier = Modifier.size(19.dp)
+                    )
                 }
             }
 

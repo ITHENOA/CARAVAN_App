@@ -87,6 +87,7 @@ export type ClientMessageType =
   | "ice_candidate"
   | "chat_message"
   | "audio_chunk"
+  | "kick_member"
   | "ping"
   | "register_push";
 
@@ -113,6 +114,7 @@ export type ServerMessageType =
   | "ice_candidate"
   | "chat_message"
   | "audio_chunk"
+  | "kicked"
   | "pong"
   | "error";
 
@@ -229,6 +231,17 @@ export interface AudioChunkMessage extends BaseMessage {
   clientId?: string;
 }
 
+export interface KickMemberMessage extends BaseMessage {
+  type: "kick_member";
+  targetClientId: string;
+  leaderToken?: string;
+}
+
+export interface KickedMessage extends BaseMessage {
+  type: "kicked";
+  reason: string;
+}
+
 export interface RegisterPushMessage extends BaseMessage {
   type: "register_push";
   fcmToken: string;
@@ -250,6 +263,7 @@ export type ClientMessage =
   | IceCandidateMessage
   | ChatMessage
   | AudioChunkMessage
+  | KickMemberMessage
   | PingMessage
   | RegisterPushMessage;
 

@@ -231,6 +231,18 @@ object CaravanProtocol {
         }.toString()
     }
 
+    fun buildKickMember(targetClientId: String, leaderToken: String? = null): String {
+        return JSONObject().apply {
+            put("type", "kick_member")
+            put("version", VERSION)
+            put("timestamp", System.currentTimeMillis())
+            put("targetClientId", targetClientId)
+            if (!leaderToken.isNullOrBlank()) {
+                put("leaderToken", leaderToken)
+            }
+        }.toString()
+    }
+
     fun buildRegisterPush(fcmToken: String): String {
         return JSONObject().apply {
             put("type", "register_push")

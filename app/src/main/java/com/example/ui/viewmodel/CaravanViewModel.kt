@@ -11,6 +11,9 @@ import com.example.data.network.*
 import com.example.data.protocol.CaravanProtocol
 import com.example.data.voice.PttState
 import com.example.data.voice.VoicePttController
+import com.example.data.update.AppUpdateManager
+import com.example.data.update.UpdateDownloadState
+import com.example.data.update.UpdateInfo
 import com.example.push.PushRegistrar
 import com.example.util.ConvoyUtils
 import com.example.util.InviteQr
@@ -75,7 +78,8 @@ data class TripUiState(
     val pttState: PttState = PttState.IDLE,
     val audioAmplitude: Float = 0f,
     val voiceNoteRecording: Boolean = false,
-    val voiceNoteReady: Boolean = false
+    val voiceNoteReady: Boolean = false,
+    val kickedReason: String? = null
 )
 
 class CaravanViewModel(application: Application) : AndroidViewModel(application) {
@@ -83,9 +87,9 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         /** Match server: ignore marks older than a drive session on join. */
         private const val MARK_TTL_MS = 30L * 60L * 1000L
         /** No location update → show as reconnecting (stale pin + time ago). */
-        private const val RECONNECTING_AFTER_MS = 20_000L
-        /** Still no location → treat as offline but keep last pin. */
-        private const val OFFLINE_AFTER_MS = 90_000L
+        private const val RECONNECTING_AFTER_MS = 60_000L
+        /** Still no location → treat as offline but keep last pin (5 minutes per user requirement). */
+        private const val OFFLINE_AFTER_MS = 300_000L
     }
 
     val prefs = PreferencesManager(application)
@@ -113,6 +117,38 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     fun setDarkMode(enabled: Boolean) {
         _isDarkMode.value = enabled
         prefs.isDarkMode = enabled
+    }
+
+    private val _mapTheme = MutableStateFlow(prefs.mapTheme)
+    val mapTheme: StateFlow<String> = _mapTheme.asStateFlow()
+
+    fun setMapTheme(theme: String) {
+        _mapTheme.value = theme
+        prefs.mapTheme = theme
+    }
+
+    private val _drivingViewZoom = MutableStateFlow(prefs.drivingViewZoom)
+    val drivingViewZoom: StateFlow<Float> = _drivingViewZoom.asStateFlow()
+
+    private val _drivingMarkerPosition = MutableStateFlow(prefs.drivingMarkerPosition)
+    val drivingMarkerPosition: StateFlow<Float> = _drivingMarkerPosition.asStateFlow()
+
+    private val _convoyFramingRadiusMeters = MutableStateFlow(prefs.convoyFramingRadiusMeters)
+    val convoyFramingRadiusMeters: StateFlow<Int> = _convoyFramingRadiusMeters.asStateFlow()
+
+    fun updateDrivingViewZoom(zoom: Float) {
+        prefs.drivingViewZoom = zoom
+        _drivingViewZoom.value = zoom
+    }
+
+    fun updateDrivingMarkerPosition(position: Float) {
+        prefs.drivingMarkerPosition = position
+        _drivingMarkerPosition.value = position
+    }
+
+    fun updateConvoyFramingRadiusMeters(meters: Int) {
+        prefs.convoyFramingRadiusMeters = meters
+        _convoyFramingRadiusMeters.value = meters
     }
 
     /** Apply saved proxy + DNS prefs to HTTP + WebSocket clients. Safe on main thread. */
@@ -303,6 +339,24 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     init {
         applyProxySettings()
 
+        com.example.service.CaravanTripForegroundService.onLeaveRequested = {
+            viewModelScope.launch(Dispatchers.Main) {
+                leaveTrip()
+            }
+        }
+
+        viewModelScope.launch {
+            _tripState.collect { state ->
+                if (state.inTrip) {
+                    com.example.service.CaravanTripForegroundService.update(
+                        getApplication(),
+                        state.tripName,
+                        state.members.size.coerceAtLeast(1)
+                    )
+                }
+            }
+        }
+
         // Listen to WebSocket events
         viewModelScope.launch {
             wsClient.events.collect { event ->
@@ -316,16 +370,20 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         pttController.isHapticsEnabled = { prefs.isHapticsEnabled }
         var audioSeq = 0
         pttController.onAudioChunkCaptured = { pcmBytes ->
-            if (pttController.pttState.value == PttState.TRANSMITTING) {
-                try {
-                    val b64 = android.util.Base64.encodeToString(pcmBytes, android.util.Base64.NO_WRAP)
-                    val msg = CaravanProtocol.buildAudioChunk(b64, 16000, audioSeq++)
-                    if (!wsClient.send(msg)) {
-                        android.util.Log.w("CaravanVM", "audio_chunk send failed (socket busy/closed), seq=${audioSeq - 1}")
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("CaravanVM", "Failed to stream audio chunk", e)
+            try {
+                val b64 = android.util.Base64.encodeToString(pcmBytes, android.util.Base64.NO_WRAP)
+                val msg = CaravanProtocol.buildAudioChunk(b64, 16000, audioSeq++)
+                if (!wsClient.send(msg)) {
+                    android.util.Log.w("CaravanVM", "audio_chunk send failed (socket busy/closed), seq=${audioSeq - 1}")
                 }
+            } catch (e: Exception) {
+                android.util.Log.e("CaravanVM", "Failed to stream audio chunk", e)
+            }
+        }
+        pttController.onLiveTransmissionEnded = {
+            audioSeq = 0
+            if (_tripState.value.inTrip) {
+                wsClient.send(CaravanProtocol.buildPttRelease())
             }
         }
         pttController.onVoiceNoteAutoStop = {
@@ -640,6 +698,12 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         wsClient.updateWsBaseUrl(prefs.wsBaseUrl)
         wsClient.connect(tripId, viewModelScope)
 
+        com.example.service.CaravanTripForegroundService.start(
+            getApplication(),
+            _tripState.value.tripName,
+            _tripState.value.members.size.coerceAtLeast(1)
+        )
+
         if (prefs.isMockFleetEnabled) {
             locationProvider.startMockFleet(viewModelScope)
         }
@@ -672,10 +736,57 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     private fun startLocationBroadcaster() {
         locationSyncJob?.cancel()
         locationSyncJob = viewModelScope.launch {
-            while (isActive) {
-                delay(2000L)
-                val loc = currentLocation.value
-                if (loc.isRealGps && (loc.latitude != 0.0 || loc.longitude != 0.0)) {
+            var lastSentLat = 0.0
+            var lastSentLng = 0.0
+            var lastSentHeading = 0.0
+            var lastSentTime = 0L
+
+            // Background & stationary presence heartbeat (guarantees peers always see user online even if parked/screen off)
+            launch {
+                while (isActive) {
+                    delay(5_000L)
+                    val now = System.currentTimeMillis()
+                    if (_tripState.value.inTrip && (now - lastSentTime >= 5_000L)) {
+                        val loc = currentLocation.value
+                        if (loc.isRealGps || (loc.latitude != 0.0 && loc.longitude != 0.0)) {
+                            val msg = CaravanProtocol.buildLocationUpdate(
+                                latitude = loc.latitude,
+                                longitude = loc.longitude,
+                                accuracy = loc.accuracy,
+                                speed = loc.speed,
+                                heading = loc.heading
+                            )
+                            if (wsClient.send(msg)) {
+                                lastSentTime = now
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Reactive collection of location fixes for true real-time GPS synchronization
+            currentLocation.collect { loc ->
+                if (!_tripState.value.inTrip) return@collect
+                if (!loc.isRealGps && (loc.latitude == 0.0 && loc.longitude == 0.0)) return@collect
+
+                val now = System.currentTimeMillis()
+                val elapsed = now - lastSentTime
+
+                val results = FloatArray(1)
+                android.location.Location.distanceBetween(
+                    lastSentLat, lastSentLng,
+                    loc.latitude, loc.longitude,
+                    results
+                )
+                val distanceMoved = results[0]
+                val headingDiff = kotlin.math.abs((loc.heading - lastSentHeading + 540.0) % 360.0 - 180.0)
+
+                // Transmit in real-time if moved, turned, or heartbeat (1500ms max idle)
+                val isSignificantMove = (elapsed >= 600L && (distanceMoved >= 1.5f || headingDiff >= 5.0))
+                val isHeartbeat = (elapsed >= 1500L)
+                val isInitial = (lastSentTime == 0L)
+
+                if (isInitial || isSignificantMove || isHeartbeat) {
                     val msg = CaravanProtocol.buildLocationUpdate(
                         latitude = loc.latitude,
                         longitude = loc.longitude,
@@ -683,7 +794,12 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                         speed = loc.speed,
                         heading = loc.heading
                     )
-                    wsClient.send(msg)
+                    if (wsClient.send(msg)) {
+                        lastSentLat = loc.latitude
+                        lastSentLng = loc.longitude
+                        lastSentHeading = loc.heading
+                        lastSentTime = now
+                    }
                 }
             }
         }
@@ -977,17 +1093,21 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
             "destination_clear" -> {
-                routeEpoch++
-                _tripState.update {
-                    it.copy(
-                        destination = null,
-                        route = null,
-                        routingProvider = null,
-                        isCalculatingRoute = false,
-                        isNavigating = false
-                    )
+                // User rule: Active route/nav must not be automatically deleted by other peers' actions
+                val hasActiveRoute = _tripState.value.isNavigating || _tripState.value.route != null
+                if (!hasActiveRoute) {
+                    routeEpoch++
+                    _tripState.update {
+                        it.copy(
+                            destination = null,
+                            route = null,
+                            routingProvider = null,
+                            isCalculatingRoute = false,
+                            isNavigating = false
+                        )
+                    }
+                    abandonOwnPublishedRoute(broadcast = false)
                 }
-                abandonOwnPublishedRoute(broadcast = true)
             }
             "chat_message" -> {
                 val cid = json.optString("clientId", "")
@@ -1088,6 +1208,13 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                     pttController.onRemoteStopped(speaker, cid)
                 }
             }
+            "kicked" -> {
+                val reason = json.optString("reason", "You were removed from the trip by the leader.")
+                viewModelScope.launch(Dispatchers.Main) {
+                    leaveTrip()
+                    _tripState.update { it.copy(kickedReason = reason) }
+                }
+            }
         }
     }
 
@@ -1116,6 +1243,16 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         dest: TripDestination,
         broadcastRouteClear: Boolean = false
     ) {
+        val cur = _tripState.value.destination
+        val hasRoute = _tripState.value.route != null
+        val isSameDest = cur != null &&
+            kotlin.math.abs(cur.latitude - dest.latitude) < 0.0001 &&
+            kotlin.math.abs(cur.longitude - dest.longitude) < 0.0001
+        if (hasRoute && (isSameDest || _tripState.value.isNavigating)) {
+            _tripState.update { it.copy(destination = dest) }
+            return
+        }
+
         routeEpoch++
         val selfId = _userProfile.value.clientId
         val hadPublished =
@@ -1529,8 +1666,6 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
     fun releasePtt() {
         pttController.onFloorReleased()
-        val msg = CaravanProtocol.buildPttRelease()
-        wsClient.send(msg)
     }
 
     fun toggleVoiceNote() {
@@ -1581,31 +1716,45 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         pendingVoiceNote = null
         _tripState.update { it.copy(voiceNoteReady = false) }
         viewModelScope.launch(Dispatchers.IO) {
-            android.util.Log.d("CaravanVM", "Sending voice note ${pcm.size} bytes")
+            val totalBytes = pcm.size
+            val audioDurationMs = (totalBytes * 1000L) / (16000L * 2L)
+            android.util.Log.d("CaravanVM", "Sending voice note $totalBytes bytes (~${audioDurationMs}ms)")
             withContext(Dispatchers.Main) {
                 sendChatMessage("🎤 Voice note")
             }
-            // Pace like live PTT so OkHttp/DO and AudioTrack aren't flooded.
+            // Signal peer PTT state so UI speaking indicator displays
+            wsClient.send(CaravanProtocol.buildPttRequest())
+
+            val startTime = System.currentTimeMillis()
             var seq = 0
             var offset = 0
             val chunkSize = 4096
-            while (offset < pcm.size) {
-                val end = minOf(offset + chunkSize, pcm.size)
+            while (offset < totalBytes) {
+                val end = minOf(offset + chunkSize, totalBytes)
                 val slice = pcm.copyOfRange(offset, end)
                 val b64 = android.util.Base64.encodeToString(slice, android.util.Base64.NO_WRAP)
                 if (!wsClient.send(CaravanProtocol.buildAudioChunk(b64, 16000, seq++))) {
                     android.util.Log.w("CaravanVM", "voice note chunk send failed seq=${seq - 1}")
-                    delay(50)
+                    delay(30L)
                     wsClient.send(CaravanProtocol.buildAudioChunk(b64, 16000, seq - 1))
                 }
                 offset = end
-                delay(120) // ~realtime for 4096B @ 16kHz mono 16-bit
+                // Smooth pacing that prevents network saturation while buffering quickly
+                delay(25L)
+            }
+
+            // Keep speaking indicator visible for the audio playback duration
+            val elapsed = System.currentTimeMillis() - startTime
+            val remaining = audioDurationMs - elapsed
+            if (remaining > 0L) {
+                delay(minOf(remaining, 30_000L))
             }
             wsClient.send(CaravanProtocol.buildPttRelease())
         }
     }
 
     fun leaveTrip() {
+        com.example.service.CaravanTripForegroundService.stop(getApplication())
         locationSyncJob?.cancel()
         locationProvider.stopMockFleet()
         locationProvider.stopLocationUpdates()
@@ -1614,6 +1763,27 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         wsClient.disconnect()
         _tripState.value = TripUiState()
         // Saved trips stay until the user deletes them.
+    }
+
+    fun kickMember(targetClientId: String) {
+        if (!_tripState.value.isLeader) return
+        val token = _tripState.value.leaderToken
+        val msg = CaravanProtocol.buildKickMember(targetClientId, token)
+        try {
+            wsClient.send(msg)
+        } catch (_: Exception) {}
+        remoteMembers.update { it - targetClientId }
+        _tripState.update { s ->
+            s.copy(
+                members = s.members.filterNot { it.id == targetClientId },
+                marks = s.marks - targetClientId,
+                sharedRoutes = s.sharedRoutes - targetClientId
+            )
+        }
+    }
+
+    fun clearKickedReason() {
+        _tripState.update { it.copy(kickedReason = null) }
     }
 
     fun deleteSavedTrip(tripId: String) {
@@ -1688,8 +1858,8 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                 if (member.connectionStatus == MemberConnectionStatus.OFFLINE) {
                     return@mapValues member
                 }
-                val locTime = member.lastLocationAt ?: member.lastSeenAt
-                val age = now - locTime
+                val locTime = maxOf(member.lastLocationAt ?: 0L, member.lastSeenAt)
+                val age = (now - locTime).coerceAtLeast(0L)
                 val inferred = when {
                     age >= OFFLINE_AFTER_MS -> MemberConnectionStatus.OFFLINE
                     age >= RECONNECTING_AFTER_MS -> MemberConnectionStatus.RECONNECTING
@@ -1706,8 +1876,47 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    val updateManager = AppUpdateManager(application)
+    private val _updateState = MutableStateFlow<UpdateDownloadState>(UpdateDownloadState.Idle)
+    val updateState: StateFlow<UpdateDownloadState> = _updateState.asStateFlow()
+
+    fun checkForAppUpdates() {
+        if (_updateState.value is UpdateDownloadState.Checking || _updateState.value is UpdateDownloadState.Downloading) {
+            return
+        }
+        viewModelScope.launch {
+            _updateState.value = UpdateDownloadState.Checking
+            val info = updateManager.checkForUpdates(prefs.apiBaseUrl)
+            if (info != null) {
+                _updateState.value = UpdateDownloadState.Available(info)
+            } else {
+                _updateState.value = UpdateDownloadState.UpToDate
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate(info: UpdateInfo) {
+        viewModelScope.launch {
+            try {
+                val apkFile = updateManager.downloadAndPrepareApk(info) { percent, isPatch, status ->
+                    _updateState.value = UpdateDownloadState.Downloading(percent, isPatch, status)
+                }
+                _updateState.value = UpdateDownloadState.ReadyToInstall(apkFile)
+                updateManager.promptInstall(apkFile)
+            } catch (e: Exception) {
+                _updateState.value = UpdateDownloadState.Error(e.message ?: "Update download failed")
+            }
+        }
+    }
+
+    fun dismissUpdateState() {
+        _updateState.value = UpdateDownloadState.Idle
+    }
+
     override fun onCleared() {
         super.onCleared()
+        com.example.service.CaravanTripForegroundService.onLeaveRequested = null
+        com.example.service.CaravanTripForegroundService.stop(getApplication())
         locationProvider.stopLocationUpdates()
         pttController.release()
         wsClient.disconnect()

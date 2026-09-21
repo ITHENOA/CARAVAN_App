@@ -35,8 +35,14 @@ class PreferencesManager(context: Context) {
         private const val KEY_MESSAGE_SOUND_ENABLED = "message_sound_enabled"
         private const val KEY_HAPTICS_ENABLED = "haptics_enabled"
         private const val KEY_DRIVING_VIEW_ZOOM = "driving_view_zoom"
+        private const val KEY_DRIVING_MARKER_POSITION = "driving_marker_position"
+        private const val KEY_CONVOY_FRAMING_RADIUS_METERS = "convoy_framing_radius_meters"
         private const val KEY_QUICK_PROMPTS = "quick_prompts"
         private const val KEY_IS_DARK_MODE = "is_dark_mode"
+        const val MAP_THEME_AUTO = "auto"
+        const val MAP_THEME_DARK = "dark"
+        const val MAP_THEME_LIGHT = "light"
+        private const val KEY_MAP_THEME = "map_theme_style"
         private const val KEY_NESHAN_API_KEY = "neshan_api_key"
         private const val KEY_PROXY_ENABLED = "proxy_enabled"
         private const val KEY_PROXY_HOST = "proxy_host"
@@ -212,11 +218,24 @@ class PreferencesManager(context: Context) {
 
     var drivingViewZoom: Float
         get() = prefs.getFloat(KEY_DRIVING_VIEW_ZOOM, 16.5f)
-        set(value) = prefs.edit().putFloat(KEY_DRIVING_VIEW_ZOOM, value.coerceIn(15.0f, 18.0f)).apply()
+        set(value) = prefs.edit().putFloat(KEY_DRIVING_VIEW_ZOOM, value.coerceIn(14.0f, 18.5f)).apply()
+
+    var drivingMarkerPosition: Float
+        get() = prefs.getFloat(KEY_DRIVING_MARKER_POSITION, 0.68f)
+        set(value) = prefs.edit().putFloat(KEY_DRIVING_MARKER_POSITION, value.coerceIn(0.50f, 0.85f)).apply()
+
+    /** Maximum radius in meters to frame online convoy members. -1 means all convoy (unlimited). */
+    var convoyFramingRadiusMeters: Int
+        get() = prefs.getInt(KEY_CONVOY_FRAMING_RADIUS_METERS, -1)
+        set(value) = prefs.edit().putInt(KEY_CONVOY_FRAMING_RADIUS_METERS, value).apply()
 
     var isDarkMode: Boolean
         get() = prefs.getBoolean(KEY_IS_DARK_MODE, false) // Default to clean Light mode so user can see light mode immediately
         set(value) = prefs.edit().putBoolean(KEY_IS_DARK_MODE, value).apply()
+
+    var mapTheme: String
+        get() = prefs.getString(KEY_MAP_THEME, MAP_THEME_AUTO) ?: MAP_THEME_AUTO
+        set(value) = prefs.edit().putString(KEY_MAP_THEME, value).apply()
 
     var neshanApiKey: String
         get() = prefs.getString(KEY_NESHAN_API_KEY, "") ?: ""

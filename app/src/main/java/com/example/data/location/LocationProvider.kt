@@ -263,8 +263,8 @@ class LocationProvider(private val context: Context) {
                     try {
                         lm.requestLocationUpdates(
                             LocationManager.GPS_PROVIDER,
-                            1000L,
-                            1f,
+                            500L,
+                            0f,
                             locationListener
                         )
                         registered = true

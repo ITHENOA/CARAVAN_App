@@ -22,6 +22,26 @@ object ConvoyUtils {
         "#10B981"  // Emerald Green
     )
 
+    val CONVOY_FRAMING_RADIUS_STEPS = listOf(
+        500,      // 500 m
+        1_000,    // 1 km
+        2_000,    // 2 km
+        5_000,    // 5 km
+        10_000,   // 10 km
+        25_000,   // 25 km
+        50_000,   // 50 km
+        100_000,  // 100 km
+        -1        // All Convoy (Unlimited)
+    )
+
+    fun formatFramingRadius(meters: Int): String {
+        return when {
+            meters <= 0 -> "All Convoy (Unlimited)"
+            meters < 1000 -> "$meters m"
+            else -> "${meters / 1000} km"
+        }
+    }
+
     fun normalizeHex(raw: String?): String {
         var h = (raw ?: "").trim()
         if (h.isEmpty()) return ""
@@ -180,26 +200,27 @@ object ConvoyUtils {
     }
 
     fun calculateBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        if (lat1.isNaN() || lon1.isNaN() || lat2.isNaN() || lon2.isNaN()) return 0.0
         val phi1 = Math.toRadians(lat1)
         val phi2 = Math.toRadians(lat2)
         val lambdaDiff = Math.toRadians(lon2 - lon1)
         val y = sin(lambdaDiff) * cos(phi2)
         val x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(lambdaDiff)
         val theta = atan2(y, x)
-        return (Math.toDegrees(theta) + 360.0) % 360.0
+        val degrees = Math.toDegrees(theta)
+        return if (degrees.isNaN()) 0.0 else (degrees + 360.0) % 360.0
     }
 
     /**
-     * Formats relative time string for member location updates (e.g. "2m ago", "15m ago", "1h ago").
-     * Returns null if fresh (< 45 seconds).
+     * Formats relative time string for member location updates (e.g. "6m ago", "15m ago", "1h ago").
+     * Returns null if fresh (< 5 minutes / online per user specification).
      */
     fun formatTimeAgo(timestamp: Long?): String? {
         if (timestamp == null || timestamp <= 0L) return null
         val diffMs = System.currentTimeMillis() - timestamp
-        if (diffMs < 45_000L) return null // Recent (< 45 sec), no stale text needed
+        if (diffMs < 300_000L) return null // Recent (< 5 minutes), member is considered actively online
         val minutes = (diffMs / 60_000L).toInt()
         return when {
-            minutes < 1 -> "just now"
             minutes < 60 -> "${minutes}m ago"
             minutes < 1440 -> "${minutes / 60}h ago"
             else -> "${minutes / 1440}d ago"

@@ -1,7 +1,12 @@
 package com.example.ui.screens.trip
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -25,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.MemberConnectionStatus
 import com.example.data.model.TripMember
 import com.example.data.voice.PttState
 import com.example.ui.screens.home.InviteShareDialog
@@ -33,6 +39,12 @@ import com.example.ui.viewmodel.CaravanConnectionStatus
 import com.example.ui.viewmodel.CaravanViewModel
 import com.example.ui.viewmodel.RoutingProvider
 import com.example.util.ConvoyUtils
+
+data class PendingRerouteTarget(
+    val lat: Double,
+    val lng: Double,
+    val label: String
+)
 
 @Composable
 fun TripScreen(
@@ -46,6 +58,12 @@ fun TripScreen(
     val currentLocation by viewModel.currentLocation.collectAsState()
     val userProfile by viewModel.userProfile.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+    val mapTheme by viewModel.mapTheme.collectAsState()
+    val isMapDark = when (mapTheme) {
+        com.example.data.local.PreferencesManager.MAP_THEME_DARK -> true
+        com.example.data.local.PreferencesManager.MAP_THEME_LIGHT -> false
+        else -> isDarkMode
+    }
     val isMyLocationActive by viewModel.isMyLocationActive.collectAsState()
     val connectionMethod = when {
         viewModel.prefs.useAetherProxy -> "AETHER"
@@ -56,7 +74,8 @@ fun TripScreen(
 
     var showFleetSheet by remember { mutableStateOf(false) }
     var showChatSheet by remember { mutableStateOf(false) }
-    var showDestinationDialog by remember { mutableStateOf(false) }
+    var showSearchDialog by remember { mutableStateOf(false) }
+    var pendingRerouteTarget by remember { mutableStateOf<PendingRerouteTarget?>(null) }
     var showLeaveConfirmDialog by remember { mutableStateOf(false) }
     var showQuickPrompts by remember { mutableStateOf(false) }
     var showInviteShare by remember { mutableStateOf(false) }
@@ -67,8 +86,47 @@ fun TripScreen(
     var returnToDrivingProgress by remember { mutableFloatStateOf(0f) }
     var drivingViewResetToken by remember { mutableLongStateOf(0L) }
 
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Toast.makeText(context, "Microphone enabled for PTT voice", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Microphone permission required for PTT voice", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun ensureMicPermission(action: () -> Unit) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            action()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    var hasHandledExit by remember { mutableStateOf(false) }
+    LaunchedEffect(tripState.inTrip) {
+        if (!tripState.inTrip && !hasHandledExit) {
+            hasHandledExit = true
+            onNavigateBack()
+        }
+    }
+
     BackHandler {
-        showLeaveConfirmDialog = true
+        when {
+            showSearchDialog -> showSearchDialog = false
+            showChatSheet -> showChatSheet = false
+            showFleetSheet -> showFleetSheet = false
+            showInviteShare -> showInviteShare = false
+            showQuickPrompts -> showQuickPrompts = false
+            pendingRerouteTarget != null -> pendingRerouteTarget = null
+            showLeaveConfirmDialog -> showLeaveConfirmDialog = false
+            else -> showLeaveConfirmDialog = true
+        }
     }
 
     fun resetReturnToDrivingTimer() {
@@ -99,6 +157,10 @@ fun TripScreen(
 
     val quickPrompts = remember { viewModel.prefs.getQuickPrompts() }
     val mutedPeerIds by viewModel.mutedPeerIds.collectAsState()
+    val drivingViewZoom by viewModel.drivingViewZoom.collectAsState()
+    val drivingMarkerPosition by viewModel.drivingMarkerPosition.collectAsState()
+    val convoyFramingRadiusMeters by viewModel.convoyFramingRadiusMeters.collectAsState()
+    var isLiveConvoyFramingActive by remember { mutableStateOf(false) }
     val remoteMemberIds = remember(tripState.members, userProfile.clientId) {
         tripState.members.filter { it.id != userProfile.clientId }.map { it.id }
     }
@@ -126,9 +188,10 @@ fun TripScreen(
             route = tripState.route,
             activeRoutingProvider = tripState.routingProvider,
             isCalculatingRoute = tripState.isCalculatingRoute,
-            isDarkMode = isDarkMode,
+            isDarkMode = isMapDark,
             isNavigating = tripState.isNavigating,
-            drivingViewZoom = viewModel.prefs.drivingViewZoom,
+            drivingViewZoom = drivingViewZoom,
+            drivingMarkerPosition = drivingMarkerPosition,
             isMyLocationActive = isMyLocationActive,
             selfColorHex = userProfile.avatarColor,
             selfClientId = userProfile.clientId,
@@ -140,8 +203,36 @@ fun TripScreen(
             onToggleAllMembersMute = {
                 viewModel.setAllPeersMuted(remoteMemberIds, !allMembersMuted)
             },
+            onToggleFreeDriving = {
+                if (tripState.isNavigating) {
+                    viewModel.exitDrivingMode()
+                } else {
+                    if (!viewModel.onMyLocationButtonClick()) {
+                        Toast.makeText(
+                            context,
+                            "Please enable device location to show your position",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        viewModel.openLocationSettings()
+                    }
+                    returnToDrivingDeadline = 0L
+                    showReturnToDriving = false
+                    returnToDrivingProgress = 0f
+                    drivingViewResetToken++
+                    viewModel.startNavigation()
+                }
+            },
+            isLiveConvoyFramingActive = isLiveConvoyFramingActive,
+            onToggleLiveConvoyFraming = {
+                isLiveConvoyFramingActive = !isLiveConvoyFramingActive
+            },
+            convoyFramingRadiusMeters = convoyFramingRadiusMeters,
             onLongPressMark = { lat, lng ->
-                viewModel.placeMapMark(lat, lng)
+                if (tripState.isNavigating || tripState.route != null) {
+                    pendingRerouteTarget = PendingRerouteTarget(lat, lng, "Marked Location")
+                } else {
+                    viewModel.placeMapMark(lat, lng)
+                }
             },
             memberToFocus = memberToFocus,
             onMemberSelected = { memberToFocus = it },
@@ -166,7 +257,7 @@ fun TripScreen(
                 if (!viewModel.onMyLocationButtonClick()) {
                     Toast.makeText(
                         context,
-                        "برای نمایش موقعیت، لوکیشن گوشی را روشن کنید",
+                        "Please enable device location to show your position",
                         Toast.LENGTH_LONG
                     ).show()
                     viewModel.openLocationSettings()
@@ -195,7 +286,7 @@ fun TripScreen(
                 memberCount = tripState.members.count { it.id != userProfile.clientId },
                 isDarkMode = isDarkMode,
                 onToggleDarkMode = { viewModel.toggleDarkMode() },
-                onOpenDestinationDialog = { showDestinationDialog = true },
+                onOpenDestinationDialog = { showSearchDialog = true },
                 onToggleFleetList = { showFleetSheet = true },
                 onOpenSettings = onNavigateToSettings,
                 onLeaveTrip = { showLeaveConfirmDialog = true },
@@ -248,6 +339,91 @@ fun TripScreen(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Free Driving Mode HUD Card (Shown when navigating without a destination)
+            if (tripState.isNavigating && tripState.destination == null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.6f)),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .testTag("free_driving_hud_card")
+                ) {
+                    val speedKmh = ((currentLocation.speed ?: 0.0) * 3.6).toInt()
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(Color(0xFF10B981).copy(alpha = 0.15f), CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.DirectionsCar,
+                                contentDescription = "Free Driving Mode",
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Free Driving Mode",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val statusText = when {
+                                isLiveConvoyFramingActive -> {
+                                    val hasSelfLoc = currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0
+                                    val count = tripState.members.count { m ->
+                                        val lat = m.latitude
+                                        val lng = m.longitude
+                                        lat != null && lng != null && lat != 0.0 && lng != 0.0 && m.connectionStatus != MemberConnectionStatus.OFFLINE && (
+                                            convoyFramingRadiusMeters <= 0 || !hasSelfLoc || ConvoyUtils.distanceMeters(currentLocation.latitude, currentLocation.longitude, lat, lng) <= convoyFramingRadiusMeters
+                                        )
+                                    }
+                                    val radiusDesc = ConvoyUtils.formatFramingRadius(convoyFramingRadiusMeters)
+                                    "Live Convoy ($radiusDesc) • $count online members in view"
+                                }
+                                speedKmh > 0 -> "$speedKmh km/h • Screen On • Moving Camera"
+                                else -> "Screen On • Following Vehicle"
+                            }
+                            Text(
+                                text = statusText,
+                                fontSize = 11.sp,
+                                color = if (isLiveConvoyFramingActive) Color(0xFF3B82F6) else Color(0xFF10B981),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        IconButton(
+                            onClick = { viewModel.exitDrivingMode() },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("btn_exit_free_driving")
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Exit Driving Mode",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -660,8 +836,8 @@ fun TripScreen(
                         pttState = tripState.pttState,
                         activeSpeakerName = tripState.activeSpeakerName,
                         audioAmplitude = tripState.audioAmplitude,
-                        onToggle = { viewModel.togglePtt() },
-                        onStartPtt = { viewModel.startPtt() },
+                        onToggle = { ensureMicPermission { viewModel.togglePtt() } },
+                        onStartPtt = { ensureMicPermission { viewModel.startPtt() } },
                         onReleasePtt = { viewModel.releasePtt() },
                         modifier = Modifier.weight(1f)
                     )
@@ -675,8 +851,8 @@ fun TripScreen(
                         audioAmplitude = tripState.audioAmplitude,
                         enabled = tripState.pttState != PttState.TRANSMITTING &&
                             tripState.pttState != PttState.REQUESTING,
-                        onToggle = { viewModel.toggleVoiceNote() },
-                        onStart = { viewModel.startVoiceNote() },
+                        onToggle = { ensureMicPermission { viewModel.toggleVoiceNote() } },
+                        onStart = { ensureMicPermission { viewModel.startVoiceNote() } },
                         onRelease = { viewModel.finishVoiceNoteRecording() },
                         onCancel = { viewModel.cancelVoiceNote() }
                     )
@@ -702,6 +878,8 @@ fun TripScreen(
                 marks = tripState.marks,
                 mutedMemberIds = mutedPeerIds,
                 allMuted = allMembersMuted,
+                isLeader = tripState.isLeader,
+                onKickMember = { viewModel.kickMember(it) },
                 onFitAllMembers = { fitAllRequestedAt = System.currentTimeMillis() },
                 onToggleAllMute = {
                     viewModel.setAllPeersMuted(remoteMemberIds, !allMembersMuted)
@@ -727,12 +905,100 @@ fun TripScreen(
             )
         }
 
-        if (showDestinationDialog) {
-            DestinationDialog(
+        if (showSearchDialog) {
+            PlaceSearchDialog(
                 userLocation = currentLocation,
-                onDismiss = { showDestinationDialog = false },
-                onSetDestination = { lat, lng, label ->
-                    viewModel.setDestination(lat, lng, label)
+                apiClient = viewModel.apiClient,
+                onDismiss = { showSearchDialog = false },
+                onSelectPlace = { lat, lng, name ->
+                    showSearchDialog = false
+                    if (tripState.isNavigating || tripState.route != null) {
+                        pendingRerouteTarget = PendingRerouteTarget(lat, lng, name)
+                    } else {
+                        if (tripState.isLeader) {
+                            viewModel.setDestination(lat, lng, name)
+                        } else {
+                            viewModel.placeMapMark(lat, lng)
+                        }
+                    }
+                }
+            )
+        }
+
+        // Re-route Confirmation Dialog
+        pendingRerouteTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { pendingRerouteTarget = null },
+                containerColor = MaterialTheme.colorScheme.surface,
+                title = {
+                    Text(
+                        text = "Change Destination?",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                text = {
+                    Text(
+                        text = "A navigation route is currently active. Do you want to calculate a new route to \"${target.label}\", or cancel and keep your current route?",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val t = target
+                            pendingRerouteTarget = null
+                            viewModel.stopNavigation()
+                            if (tripState.isLeader) {
+                                viewModel.setDestination(t.lat, t.lng, t.label)
+                            } else {
+                                viewModel.placeMapMark(t.lat, t.lng)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CaravanBlue)
+                    ) {
+                        Text("New Route")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRerouteTarget = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // Kicked from Convoy Notification Dialog
+        tripState.kickedReason?.let { reason ->
+            AlertDialog(
+                onDismissRequest = {
+                    viewModel.clearKickedReason()
+                    onNavigateBack()
+                },
+                containerColor = MaterialTheme.colorScheme.surface,
+                title = {
+                    Text(
+                        text = "Removed from Convoy",
+                        fontWeight = FontWeight.Bold,
+                        color = CaravanCrimson
+                    )
+                },
+                text = {
+                    Text(
+                        text = reason,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.clearKickedReason()
+                            onNavigateBack()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = CaravanBlue)
+                    ) {
+                        Text("OK")
+                    }
                 }
             )
         }
@@ -742,34 +1008,66 @@ fun TripScreen(
             AlertDialog(
                 onDismissRequest = { showLeaveConfirmDialog = false },
                 containerColor = MaterialTheme.colorScheme.surface,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.DirectionsCar,
+                        contentDescription = null,
+                        tint = CaravanBlue,
+                        modifier = Modifier.size(32.dp)
+                    )
+                },
                 title = {
                     Text(
                         "Leave Convoy?",
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleLarge
                     )
                 },
                 text = {
-                    Text(
-                        "You disconnect from this trip, but it stays in Your Convoys until you delete it.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Are you sure you want to leave \"${tripState.tripName}\"?",
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "• Keep in Background: Keeps the convoy active with live location, voice, and notifications even if your phone screen is turned off.\n• Leave Convoy: Disconnects completely and returns to the home screen.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 },
                 confirmButton = {
-                    Button(
-                        onClick = {
-                            showLeaveConfirmDialog = false
-                            viewModel.leaveTrip()
-                            onNavigateBack()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = CaravanCrimson)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Leave Trip", color = Color.White)
+                        OutlinedButton(
+                            onClick = {
+                                showLeaveConfirmDialog = false
+                                (context as? android.app.Activity)?.moveTaskToBack(true)
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = CaravanBlue
+                            )
+                        ) {
+                            Text("Keep in Background")
+                        }
+                        Button(
+                            onClick = {
+                                showLeaveConfirmDialog = false
+                                viewModel.leaveTrip()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = CaravanCrimson)
+                        ) {
+                            Text("Leave Convoy", color = Color.White)
+                        }
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showLeaveConfirmDialog = false }) {
-                        Text("Stay", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             )

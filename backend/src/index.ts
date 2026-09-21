@@ -54,6 +54,24 @@ export default {
         return withCors(jsonResponse({ status: "healthy" }));
       }
 
+      const LATEST_APK_URL = "https://github.com/ITHENOA/CARAVAN_App/releases/latest/download/caravan-release.apk";
+
+      if (request.method === "GET" && (url.pathname === "/download" || url.pathname === "/download/latest")) {
+        return Response.redirect(LATEST_APK_URL, 302);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/version") {
+        return withCors(
+          jsonResponse({
+            versionCode: 14,
+            versionName: "3.4.0",
+            changelog: "Real-time convoy synchronization, adaptive map views, smart delta updating, and zero-latency PTT audio.",
+            downloadUrl: LATEST_APK_URL,
+            patch: null,
+          }),
+        );
+      }
+
       if (request.method === "POST" && url.pathname === "/api/trips") {
         return withCors(await createTrip(request, env, url));
       }

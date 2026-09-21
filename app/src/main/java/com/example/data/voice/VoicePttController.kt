@@ -52,6 +52,8 @@ class VoicePttController(private val context: Context) {
 
     // Callback invoked when a chunk of raw 16-bit PCM audio is captured from the mic
     var onAudioChunkCaptured: ((ByteArray) -> Unit)? = null
+    /** Fired when live transmission completes flushing all audio chunks. */
+    var onLiveTransmissionEnded: (() -> Unit)? = null
     /** Fired when voice-note hits max length so the VM can flush/send. */
     var onVoiceNoteAutoStop: (() -> Unit)? = null
     /** When false, PTT chirps stay silent (haptics still run). */
@@ -64,6 +66,12 @@ class VoicePttController(private val context: Context) {
     private var recordingJob: Job? = null
     private var voiceNoteBuffer: ByteArrayOutputStream? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Jitter-Buffered Audio Playback Queue to completely eliminate audio cutouts & clicks
+    private val playbackQueue = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
+    private var playbackJob: Job? = null
+    @Volatile
+    private var currentSampleRate = 16000
 
     companion object {
         private const val SAMPLE_RATE = 16000
@@ -180,7 +188,6 @@ class VoicePttController(private val context: Context) {
         }
         // Audio can arrive without a matching ptt_release (name mismatch / dropped msg).
         scheduleSpeakingClear()
-        routePlaybackToSpeaker()
     }
 
     fun onRemoteStopped(speakerName: String? = null, clientId: String? = null) {
@@ -212,10 +219,16 @@ class VoicePttController(private val context: Context) {
         val wasTransmitting = _pttState.value == PttState.TRANSMITTING
         _pttState.value = PttState.IDLE
         clearRemoteSpeaker()
-        stopAudioCapture()
-        // Keep AudioTrack alive so overlapping remote speech isn't cut off.
         if (wasTransmitting) {
             playChirpEnd()
+        }
+        // Allow in-flight audio buffer to flush and notify VM when transmission is completely finished
+        scope.launch {
+            kotlinx.coroutines.delay(100L)
+            stopAudioCapture()
+            if (wasTransmitting) {
+                onLiveTransmissionEnded?.invoke()
+            }
         }
     }
 
@@ -238,38 +251,47 @@ class VoicePttController(private val context: Context) {
 
     /**
      * Streams incoming raw PCM 16-bit mono audio data from another convoy member directly through AudioTrack.
+     * Uses a resilient jitter buffer to prevent choppy audio, underruns, and cutouts.
      */
-    @Synchronized
     fun playAudioChunk(pcmData: ByteArray, sampleRate: Int = 16000, speakerId: String? = null) {
         if (pcmData.isEmpty()) return
         if (speakerId != null && _mutedPeerIds.value.contains(speakerId)) return
-        try {
-            routePlaybackToSpeaker()
-            if (audioTrack == null || audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-                initAudioTrack(sampleRate)
-            }
-            audioTrack?.let { track ->
-                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                    track.play()
+
+        currentSampleRate = sampleRate
+        playbackQueue.offer(pcmData)
+
+        synchronized(this) {
+            if (playbackJob == null || playbackJob?.isActive != true) {
+                playbackJob = scope.launch(Dispatchers.IO) {
+                    runPlaybackLoop()
                 }
-                track.write(pcmData, 0, pcmData.size)
             }
-        } catch (e: Exception) {
-            Log.e("VoicePttController", "Failed to play audio chunk", e)
         }
     }
 
-    private fun initAudioTrack(sampleRate: Int) {
-        cleanUpAudioTrack()
+    private suspend fun runPlaybackLoop() {
+        var track: AudioTrack? = null
         try {
+            // Ensure media stream has audible volume if turned down
+            try {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                if (am != null) {
+                    val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    if (curVol <= 1 && maxVol > 0) {
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, (maxVol * 0.7f).toInt(), 0)
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val sampleRate = currentSampleRate
             val minBufferSize = AudioTrack.getMinBufferSize(
                 sampleRate,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
-            val bufferSize = maxOf(minBufferSize * 2, 8192)
-            // USAGE_MEDIA + speakerphone: VOICE_COMMUNICATION alone routes to the earpiece,
-            // so convoy members hear the PTT indicator/chirp but no actual voice.
+            val bufferSize = if (minBufferSize > 0) maxOf(minBufferSize * 2, 8192) else 8192
+
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -280,41 +302,74 @@ class VoicePttController(private val context: Context) {
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                 .build()
 
-            audioTrack = AudioTrack.Builder()
+            track = AudioTrack.Builder()
                 .setAudioAttributes(audioAttributes)
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
-            audioTrack?.setVolume(AudioTrack.getMaxVolume())
-            audioTrack?.play()
-        } catch (e: Exception) {
-            Log.e("VoicePttController", "AudioTrack init error", e)
-        }
-    }
+            if (track.state != AudioTrack.STATE_INITIALIZED) {
+                Log.e("VoicePttController", "AudioTrack failed to initialize! State: ${track.state}")
+                track.release()
+                return
+            }
 
-    @Suppress("DEPRECATION")
-    private fun routePlaybackToSpeaker() {
-        try {
-            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-            am.mode = AudioManager.MODE_NORMAL
-            am.isSpeakerphoneOn = true
-        } catch (e: Exception) {
-            Log.w("VoicePttController", "Failed to route playback to speaker", e)
-        }
-    }
+            audioTrack = track
+            track.setVolume(1.0f)
+            track.play()
 
-    @Suppress("DEPRECATION")
-    private fun restoreAudioRouting() {
-        try {
-            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-            am.isSpeakerphoneOn = false
-            am.mode = AudioManager.MODE_NORMAL
-        } catch (_: Exception) {}
+            var idleCount = 0
+            while (currentCoroutineContext().isActive) {
+                val chunk = playbackQueue.poll()
+                if (chunk != null && chunk.isNotEmpty()) {
+                    idleCount = 0
+                    var writtenTotal = 0
+                    while (writtenTotal < chunk.size && currentCoroutineContext().isActive) {
+                        val written = track.write(
+                            chunk,
+                            writtenTotal,
+                            chunk.size - writtenTotal,
+                            AudioTrack.WRITE_BLOCKING
+                        )
+                        if (written <= 0) {
+                            Log.w("VoicePttController", "AudioTrack.write returned $written")
+                            break
+                        }
+                        writtenTotal += written
+                    }
+                } else {
+                    idleCount++
+                    // Wait up to ~1.2 seconds of silence before tearing down the track
+                    if (idleCount > 60) {
+                        break
+                    }
+                    delay(20L)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("VoicePttController", "Error in audio playback loop", e)
+        } finally {
+            try {
+                // Give AudioFlinger a moment to render the tail of the buffer
+                delay(120L)
+                track?.let {
+                    if (it.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        it.stop()
+                    }
+                    it.release()
+                }
+            } catch (_: Exception) {}
+            if (audioTrack == track) {
+                audioTrack = null
+            }
+        }
     }
 
     private fun cleanUpAudioTrack() {
+        playbackJob?.cancel()
+        playbackJob = null
+        playbackQueue.clear()
         try {
             audioTrack?.let {
                 if (it.playState == AudioTrack.PLAYSTATE_PLAYING) {
@@ -346,13 +401,27 @@ class VoicePttController(private val context: Context) {
                 // Chunks of ~128ms (2048 shorts = 4096 bytes)
                 val bufferSize = maxOf(minBufferSize, 4096)
 
-                audioRecord = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
-                    channelConfig,
-                    audioFormat,
-                    bufferSize
-                )
+                var rec: AudioRecord? = null
+                try {
+                    rec = AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                        SAMPLE_RATE,
+                        channelConfig,
+                        audioFormat,
+                        bufferSize
+                    )
+                } catch (_: Exception) {}
+                if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) {
+                    try { rec?.release() } catch (_: Exception) {}
+                    rec = AudioRecord(
+                        MediaRecorder.AudioSource.MIC,
+                        SAMPLE_RATE,
+                        channelConfig,
+                        audioFormat,
+                        bufferSize
+                    )
+                }
+                audioRecord = rec
 
                 if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                     Log.e("VoicePttController", "AudioRecord failed to initialize — no audio chunks will be sent")
@@ -362,7 +431,7 @@ class VoicePttController(private val context: Context) {
 
                 audioRecord?.startRecording()
                 Log.d("VoicePttController", if (liveStream) "PTT capture started" else "Voice-note capture started")
-                val buffer = ShortArray(2048) // 128ms per chunk
+                val buffer = ShortArray(1024) // 64ms per chunk for responsive, zero-clip start
                 while (isActive && (
                     (liveStream && _pttState.value == PttState.TRANSMITTING) ||
                         (!liveStream && _voiceNoteRecording.value)
@@ -412,6 +481,24 @@ class VoicePttController(private val context: Context) {
                         break
                     }
                 }
+
+                // Drain any final pending audio samples from the hardware buffer so word endings are never cut off
+                if (liveStream) {
+                    try {
+                        val tailBuffer = ShortArray(1024)
+                        val tailRead = audioRecord?.read(tailBuffer, 0, tailBuffer.size, AudioRecord.READ_NON_BLOCKING) ?: 0
+                        if (tailRead > 0) {
+                            val byteData = ByteArray(tailRead * 2)
+                            var idx = 0
+                            for (i in 0 until tailRead) {
+                                val s = tailBuffer[i].toInt()
+                                byteData[idx++] = (s and 0xFF).toByte()
+                                byteData[idx++] = ((s shr 8) and 0xFF).toByte()
+                            }
+                            onAudioChunkCaptured?.invoke(byteData)
+                        }
+                    } catch (_: Exception) {}
+                }
             } catch (e: Exception) {
                 Log.e("VoicePttController", "Audio recording error", e)
             } finally {
@@ -460,7 +547,6 @@ class VoicePttController(private val context: Context) {
         voiceNoteBuffer = null
         stopAudioCapture()
         cleanUpAudioTrack()
-        restoreAudioRouting()
         scope.cancel()
         try {
             toneGenerator?.release()

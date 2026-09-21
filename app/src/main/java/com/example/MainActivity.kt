@@ -118,7 +118,12 @@ fun CaravanApp(viewModel: CaravanViewModel = viewModel()) {
             TripScreen(
                 viewModel = viewModel,
                 onNavigateBack = {
-                    navController.popBackStack()
+                    val popped = navController.popBackStack(CaravanRoutes.HOME, false)
+                    if (!popped) {
+                        navController.navigate(CaravanRoutes.HOME) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
                 },
                 onNavigateToSettings = {
                     navController.navigate(CaravanRoutes.SETTINGS)

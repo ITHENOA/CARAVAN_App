@@ -300,6 +300,9 @@ export class TripRoom extends DurableObject<Env> {
         case "audio_chunk":
           this.handleAudioChunk(ws, msg);
           break;
+        case "kick_member":
+          await this.handleKickMember(ws, msg);
+          break;
         case "register_push":
           await this.handleRegisterPush(ws, msg);
           break;
@@ -1051,6 +1054,72 @@ export class TripRoom extends DurableObject<Env> {
       },
       ws,
     );
+  }
+
+  private async handleKickMember(
+    ws: WebSocket,
+    msg: Extract<ReturnType<typeof parseClientMessage>, { type: "kick_member" }>,
+  ): Promise<void> {
+    const att = this.getAttachment(ws);
+    if (!att.joined || !att.clientId) {
+      this.sendError(ws, "NOT_JOINED", "Join required");
+      return;
+    }
+
+    let isLeader = false;
+    if (this.trip && att.clientId === this.trip.leaderId) {
+      isLeader = true;
+    }
+    if (msg.leaderToken && this.trip) {
+      const hash = await sha256Hex(msg.leaderToken);
+      if (timingSafeEqual(hash, this.trip.leaderTokenHash)) {
+        isLeader = true;
+      }
+    }
+
+    if (!isLeader) {
+      this.sendError(ws, "FORBIDDEN", "Only the trip leader can remove members");
+      return;
+    }
+
+    const targetClientId = msg.targetClientId;
+    if (!targetClientId || targetClientId === att.clientId) {
+      return;
+    }
+
+    const targetWs = this.socketsByClient.get(targetClientId);
+    if (targetWs) {
+      this.send(targetWs, {
+        type: "kicked",
+        version: PROTOCOL_VERSION,
+        timestamp: nowMs(),
+        reason: "You were removed from the trip by the leader",
+      });
+      await this.detachSocket(targetWs, false);
+      try {
+        targetWs.close(4003, "Kicked by leader");
+      } catch {
+        // ignore
+      }
+    } else {
+      this.members.delete(targetClientId);
+      this.marks.delete(targetClientId);
+      this.routes.delete(targetClientId);
+    }
+
+    this.broadcast({
+      type: "member_left",
+      version: PROTOCOL_VERSION,
+      timestamp: nowMs(),
+      clientId: targetClientId,
+    });
+    this.broadcast({
+      type: "members_snapshot",
+      version: PROTOCOL_VERSION,
+      timestamp: nowMs(),
+      members: this.snapshotMembers(),
+    });
+    await this.persistMembersLite();
   }
 
   private forwardSignal(
