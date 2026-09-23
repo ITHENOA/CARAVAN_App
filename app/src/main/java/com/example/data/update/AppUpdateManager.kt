@@ -72,7 +72,8 @@ class AppUpdateManager(
                 val remoteCode = json.optInt("versionCode", 0)
                 val remoteName = json.optString("versionName", "")
                 val changelog = json.optString("changelog", "Bug fixes and performance improvements")
-                val fullApkUrl = json.optString("downloadUrl", "")
+                val rawFullApkUrl = json.optString("downloadUrl", "")
+                val fullApkUrl = if (rawFullApkUrl.startsWith("/")) "$cleanBase$rawFullApkUrl" else rawFullApkUrl
                 val fullApkSha256 = json.optString("sha256", "").ifBlank { null }
 
                 // Differential patch support
@@ -83,7 +84,8 @@ class AppUpdateManager(
                 var isPatchAvailable = false
 
                 if (patchObj != null) {
-                    patchUrl = patchObj.optString("patchUrl", "").ifBlank { null }
+                    val rawPatchUrl = patchObj.optString("patchUrl", "").ifBlank { null }
+                    patchUrl = if (rawPatchUrl?.startsWith("/") == true) "$cleanBase$rawPatchUrl" else rawPatchUrl
                     patchFromCode = patchObj.optInt("fromVersionCode", -1)
                     patchSha256 = patchObj.optString("patchSha256", "").ifBlank { null }
                     if (patchUrl != null && patchFromCode == BuildConfig.VERSION_CODE) {

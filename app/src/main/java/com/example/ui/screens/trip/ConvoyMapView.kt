@@ -10,6 +10,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -33,6 +34,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -94,6 +96,7 @@ fun ConvoyMapView(
     onToggleFreeDriving: () -> Unit = {},
     isLiveConvoyFramingActive: Boolean = false,
     onToggleLiveConvoyFraming: () -> Unit = {},
+    onFitAll: () -> Unit = {},
     convoyFramingRadiusMeters: Int = -1,
     memberToFocus: TripMember? = null,
     onLongPressMark: (latitude: Double, longitude: Double) -> Unit,
@@ -122,6 +125,8 @@ fun ConvoyMapView(
     val activeMarkerAnimators = remember { mutableMapOf<String, ValueAnimator>() }
     val memberIconCache = remember { mutableMapOf<String, org.maplibre.android.annotations.Icon?>() }
     val memberMarkerSignature = remember { mutableMapOf<String, String>() }
+    val memberLastKnownLocations = remember { mutableMapOf<String, LatLng>() }
+    var memberScreenPoints by remember { mutableStateOf<Map<String, PointF>>(emptyMap()) }
     var wasLiveConvoyFraming by remember { mutableStateOf(false) }
 
     var destScreenPoint by remember { mutableStateOf<PointF?>(null) }
@@ -132,6 +137,7 @@ fun ConvoyMapView(
     var recenterRequestedAt by remember { mutableLongStateOf(0L) }
     var lastMapSize by remember { mutableStateOf(IntSize.Zero) }
     var followDrivingCamera by remember { mutableStateOf(true) }
+    var followLocationCamera by remember { mutableStateOf(false) }
     var movementBearing by remember { mutableStateOf<Double?>(null) }
     var previousLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val currentDestination by rememberUpdatedState(destination)
@@ -152,13 +158,25 @@ fun ConvoyMapView(
                 latitude,
                 longitude
             )
-            if (distance >= 2.0) {
-                movementBearing = ConvoyUtils.calculateBearing(
+            val speedMps = currentLocation.speed ?: 0.0
+            // Only update bearing when vehicle is genuinely moving to avoid camera spin while stopped
+            if (distance >= 2.0 || speedMps >= 0.8) {
+                val newBearing = ConvoyUtils.calculateBearing(
                     previousLatitude,
                     previousLongitude,
                     latitude,
                     longitude
                 )
+                val current = movementBearing
+                if (current == null) {
+                    movementBearing = newBearing
+                } else {
+                    var diff = (newBearing - current) % 360.0
+                    if (diff < -180.0) diff += 360.0
+                    if (diff > 180.0) diff -= 360.0
+                    // Smooth 25% blend towards new bearing to prevent sudden heading snaps
+                    movementBearing = (current + diff * 0.25 + 360.0) % 360.0
+                }
             }
         }
         previousLocation = latitude to longitude
@@ -182,7 +200,7 @@ fun ConvoyMapView(
                 destScreenPoint = null
             }
             val loc = currentLocationState
-            if (isMyLocationActiveState && (loc.latitude != 0.0 || loc.longitude != 0.0)) {
+            if (loc.latitude != 0.0 || loc.longitude != 0.0) {
                 selfScreenPoint = m.projection.toScreenLocation(LatLng(loc.latitude, loc.longitude))
             } else {
                 selfScreenPoint = null
@@ -192,6 +210,23 @@ fun ConvoyMapView(
                 nextMarks[id] = m.projection.toScreenLocation(LatLng(mark.latitude, mark.longitude))
             }
             markScreenPoints = nextMarks
+
+            val nextMemberPoints = HashMap<String, PointF>(members.size)
+            members.forEach { member ->
+                if (member.id != selfClientId) {
+                    val lat = member.latitude
+                    val lng = member.longitude
+                    val pos = if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
+                        LatLng(lat, lng).also { memberLastKnownLocations[member.id] = it }
+                    } else {
+                        memberLastKnownLocations[member.id]
+                    }
+                    if (pos != null) {
+                        nextMemberPoints[member.id] = m.projection.toScreenLocation(pos)
+                    }
+                }
+            }
+            memberScreenPoints = nextMemberPoints
         } catch (_: Exception) {}
     }
 
@@ -262,12 +297,14 @@ fun ConvoyMapView(
             map.addOnCameraMoveStartedListener { reason ->
                 if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
                     followDrivingCamera = false
+                    followLocationCamera = false
                     onDrivingViewInterruptedState()
                 }
             }
             map.addOnShoveListener(object : MapLibreMap.OnShoveListener {
                 override fun onShoveBegin(detector: org.maplibre.android.gestures.ShoveGestureDetector) {
                     followDrivingCamera = false
+                    followLocationCamera = false
                     onDrivingViewInterruptedState()
                 }
 
@@ -280,6 +317,7 @@ fun ConvoyMapView(
             }
 
             map.addOnMapClickListener {
+                followLocationCamera = false
                 onDrivingViewInterruptedState()
                 false
             }
@@ -347,25 +385,11 @@ fun ConvoyMapView(
 
     var wasNavigating by remember { mutableStateOf(false) }
 
-    // Camera to user only after GPS button is turned on (not on launch)
-    LaunchedEffect(isMapReady, isMyLocationActive, currentLocation.latitude, currentLocation.longitude) {
-        val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isMapReady || !isMyLocationActive) return@LaunchedEffect
-        if (!initialCameraSet && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
-            initialCameraSet = true
-            map.cameraPosition = CameraPosition.Builder()
-                .target(LatLng(currentLocation.latitude, currentLocation.longitude))
-                .zoom(14.5)
-                .padding(cameraPadding(map, false))
-                .build()
-        }
-    }
-
     // GPS button: prefer a fix from after the tap; fall back after a short wait
     val locationForRecenter by rememberUpdatedState(currentLocation)
     val navigatingForRecenter by rememberUpdatedState(isNavigating)
-    LaunchedEffect(recenterRequestedAt, isMapReady, isMyLocationActive) {
-        if (recenterRequestedAt == 0L || !isMapReady || !isMyLocationActive) return@LaunchedEffect
+    LaunchedEffect(recenterRequestedAt, isMapReady) {
+        if (recenterRequestedAt == 0L || !isMapReady) return@LaunchedEffect
         val map = mapLibreMap ?: return@LaunchedEffect
         val softDeadline = recenterRequestedAt + 2500L
         val hardDeadline = recenterRequestedAt + 5000L
@@ -375,17 +399,21 @@ fun ConvoyMapView(
             val fresh = loc.timestamp >= recenterRequestedAt - 500L
             val now = System.currentTimeMillis()
             if (hasLoc && (fresh || loc.isRealGps || now >= softDeadline)) {
+                followLocationCamera = true
+                if (navigatingForRecenter) {
+                    followDrivingCamera = true
+                }
                 map.animateCamera(
                     CameraUpdateFactory.newCameraPosition(
                         CameraPosition.Builder()
                             .target(LatLng(loc.latitude, loc.longitude))
-                            .zoom(if (navigatingForRecenter) drivingViewZoom.toDouble() else 15.0)
+                            .zoom(if (navigatingForRecenter) drivingViewZoom.toDouble() else 15.5)
                             .tilt(if (navigatingForRecenter) 50.0 else 0.0)
                             .bearing(if (navigatingForRecenter) movementBearing ?: map.cameraPosition.bearing else 0.0)
                             .padding(cameraPadding(map, navigatingForRecenter))
                             .build()
                     ),
-                    800
+                    950
                 )
                 initialCameraSet = true
                 recenterRequestedAt = 0L
@@ -395,7 +423,7 @@ fun ConvoyMapView(
                 recenterRequestedAt = 0L
                 return@LaunchedEffect
             }
-            kotlinx.coroutines.delay(300)
+            kotlinx.coroutines.delay(200)
         }
     }
 
@@ -410,26 +438,40 @@ fun ConvoyMapView(
                 CameraUpdateFactory.newCameraPosition(
                     CameraPosition.Builder()
                         .target(LatLng(targetLat, targetLng))
-                        .zoom(15.0)
+                        .zoom(15.5)
                         .tilt(0.0)
                         .bearing(0.0)
                         .padding(cameraPadding(map, false))
                         .build()
                 ),
-                800
+                950
             )
         }
         wasNavigating = isNavigating
     }
 
-    // Follow user location smoothly when navigating (3D tilt)
-    // Priority is Driving View: forward bearing, 50° tilt, fixed vehicle icon position.
-    // If Live Convoy Framing is also active, smoothly adjust zoom to keep convoy members in view!
-    LaunchedEffect(isNavigating, currentLocation.latitude, currentLocation.longitude, movementBearing, followDrivingCamera, drivingViewZoom, drivingMarkerPosition, isLiveConvoyFramingActive, members, convoyFramingRadiusMeters) {
+    // Camera follow user location smoothly:
+    // 1) In Driving / Navigation mode (3D tilt, bearing, vehicle offset)
+    // 2) In Regular mode when followLocationCamera is enabled (2D top-down, centered)
+    LaunchedEffect(
+        isNavigating,
+        currentLocation.latitude,
+        currentLocation.longitude,
+        movementBearing,
+        followDrivingCamera,
+        followLocationCamera,
+        drivingViewZoom,
+        drivingMarkerPosition,
+        isLiveConvoyFramingActive,
+        members,
+        convoyFramingRadiusMeters
+    ) {
         val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isMapReady) return@LaunchedEffect
+        if (!isMapReady || isLiveConvoyFramingActive) return@LaunchedEffect
         val hasSelfLocation = currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0
-        if (isNavigating && followDrivingCamera && hasSelfLocation) {
+        if (!hasSelfLocation) return@LaunchedEffect
+
+        if (isNavigating && followDrivingCamera) {
             val effectiveZoom = if (isLiveConvoyFramingActive) {
                 var maxDistance = 0.0
                 members.forEach { m ->
@@ -443,7 +485,6 @@ fun ConvoyMapView(
                     }
                 }
                 if (maxDistance > 80.0) {
-                    // Smoothly adjust zoom: 100m -> 16.5, 500m -> 15.5, 1500m -> 14.5, 3000m -> 13.5
                     val logVal = kotlin.math.ln(maxDistance / 80.0) / kotlin.math.ln(2.0)
                     val z = 16.5 - logVal * 0.65
                     z.coerceIn(13.0, 16.5).toFloat()
@@ -464,7 +505,21 @@ fun ConvoyMapView(
                         .padding(cameraPadding(map, true))
                         .build()
                 ),
-                450
+                950
+            )
+        } else if (!isNavigating && followLocationCamera) {
+            val currentZoom = if (map.cameraPosition.zoom < 10.0) 15.5 else map.cameraPosition.zoom
+            map.animateCamera(
+                CameraUpdateFactory.newCameraPosition(
+                    CameraPosition.Builder()
+                        .target(LatLng(currentLocation.latitude, currentLocation.longitude))
+                        .zoom(currentZoom)
+                        .tilt(0.0)
+                        .bearing(0.0)
+                        .padding(cameraPadding(map, false))
+                        .build()
+                ),
+                950
             )
         }
     }
@@ -478,7 +533,7 @@ fun ConvoyMapView(
         val map = mapLibreMap ?: return@LaunchedEffect
 
         val now = System.currentTimeMillis()
-        if (now - lastOverviewFramingTime < 1500L) return@LaunchedEffect
+        if (now - lastOverviewFramingTime < 1800L) return@LaunchedEffect
         lastOverviewFramingTime = now
 
         val hasSelfLocation = currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0
@@ -533,7 +588,7 @@ fun ConvoyMapView(
                         padSide,
                         padBottom
                     ),
-                    700
+                    950
                 )
             } else {
                 map.animateCamera(
@@ -546,7 +601,7 @@ fun ConvoyMapView(
                             .padding(doubleArrayOf(padSide.toDouble(), padTop.toDouble(), padSide.toDouble(), padBottom.toDouble()))
                             .build()
                     ),
-                    700
+                    950
                 )
             }
         } else {
@@ -561,7 +616,7 @@ fun ConvoyMapView(
                     padSide,
                     padBottom
                 ),
-                750
+                950
             )
         }
     }
@@ -622,7 +677,7 @@ fun ConvoyMapView(
                         .padding(cameraPadding(map, true))
                         .build()
                 ),
-                350
+                950
             )
         }
     }
@@ -636,34 +691,84 @@ fun ConvoyMapView(
         val selfLng = currentLocation.longitude
         if ((selfLat == 0.0 && selfLng == 0.0) || (memberLat == 0.0 && memberLng == 0.0)) return@LaunchedEffect
 
+        followLocationCamera = false
+        followDrivingCamera = false
+
+        val densityVal = context.resources.displayMetrics.density
+        val padSide = (60 * densityVal).toInt()
+        val padTop = (130 * densityVal).toInt()
+        val padBottom = (140 * densityVal).toInt()
+
         val bounds = LatLngBounds.Builder()
             .include(LatLng(selfLat, selfLng))
             .include(LatLng(memberLat, memberLng))
             .build()
-        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 120), 800)
+        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, padSide, padTop, padSide, padBottom), 950)
     }
 
     LaunchedEffect(fitAllRequestedAt, isMapReady) {
         if (fitAllRequestedAt == 0L || !isMapReady) return@LaunchedEffect
         val map = mapLibreMap ?: return@LaunchedEffect
+        followLocationCamera = false
+        followDrivingCamera = false
+
         val points = buildList {
             if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
                 add(LatLng(currentLocation.latitude, currentLocation.longitude))
             }
             members.forEach { member ->
-                if (member.latitude != null && member.longitude != null) {
+                if (member.latitude != null && member.longitude != null && member.latitude != 0.0 && member.longitude != 0.0) {
                     add(LatLng(member.latitude, member.longitude))
                 }
             }
         }
         if (points.isEmpty()) return@LaunchedEffect
+        val densityVal = context.resources.displayMetrics.density
+        val padSide = (70 * densityVal).toInt()
+        val padTop = (140 * densityVal).toInt()
+        val padBottom = (150 * densityVal).toInt()
+
         if (points.size == 1) {
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15.0), 700)
+            map.animateCamera(
+                CameraUpdateFactory.newCameraPosition(
+                    CameraPosition.Builder()
+                        .target(points.first())
+                        .zoom(14.5)
+                        .tilt(0.0)
+                        .bearing(0.0)
+                        .build()
+                ),
+                950
+            )
         } else {
-            val bounds = LatLngBounds.Builder().also { builder ->
-                points.forEach(builder::include)
-            }.build()
-            map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 120), 800)
+            var minLat = Double.MAX_VALUE
+            var maxLat = -Double.MAX_VALUE
+            var minLng = Double.MAX_VALUE
+            var maxLng = -Double.MAX_VALUE
+            points.forEach { pt ->
+                if (pt.latitude < minLat) minLat = pt.latitude
+                if (pt.latitude > maxLat) maxLat = pt.latitude
+                if (pt.longitude < minLng) minLng = pt.longitude
+                if (pt.longitude > maxLng) maxLng = pt.longitude
+            }
+            val latDiff = maxLat - minLat
+            val lngDiff = maxLng - minLng
+            val minSpan = 0.005
+            val centerLat = (minLat + maxLat) / 2.0
+            val centerLng = (minLng + maxLng) / 2.0
+            val effectiveMinLat = if (latDiff < minSpan) centerLat - (minSpan / 2.0) else minLat
+            val effectiveMaxLat = if (latDiff < minSpan) centerLat + (minSpan / 2.0) else maxLat
+            val effectiveMinLng = if (lngDiff < minSpan) centerLng - (minSpan / 2.0) else minLng
+            val effectiveMaxLng = if (lngDiff < minSpan) centerLng + (minSpan / 2.0) else maxLng
+
+            val bounds = LatLngBounds.Builder()
+                .include(LatLng(effectiveMinLat, effectiveMinLng))
+                .include(LatLng(effectiveMaxLat, effectiveMaxLng))
+                .build()
+            map.animateCamera(
+                CameraUpdateFactory.newLatLngBounds(bounds, padSide, padTop, padSide, padBottom),
+                1000
+            )
         }
     }
 
@@ -779,118 +884,17 @@ fun ConvoyMapView(
 
     // 3. Map marks are Compose RadiatingTargetMarker overlays (same size/pulse as destination)
 
-    // 4. Synchronize Convoy Member Markers (refresh every 15s so "Xm ago" stays current)
-    var presenceTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(15_000L)
-            presenceTick++
-        }
-    }
-    LaunchedEffect(isMapReady, members, selfClientId, presenceTick) {
-        val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isMapReady) return@LaunchedEffect
-
-        try {
-            val validMembers = members.filter { m ->
-                m.id != selfClientId && m.latitude != null && m.longitude != null &&
-                    m.latitude != 0.0 && m.longitude != 0.0
-            }
-            val validIds = validMembers.map { it.id }.toSet()
-
-            // 1. Remove markers for members who are no longer valid or left the convoy
-            val iterator = activeMemberMarkers.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (entry.key !in validIds) {
-                    try { map.removeMarker(entry.value) } catch (_: Exception) {}
-                    activeMarkerAnimators[entry.key]?.cancel()
-                    activeMarkerAnimators.remove(entry.key)
-                    iterator.remove()
-                    memberMarkerSignature.remove(entry.key)
-                }
-            }
-
-            // 2. Add or update markers in place with smooth position interpolation
-            validMembers.forEach { member ->
-                val mLat = member.latitude ?: return@forEach
-                val mLng = member.longitude ?: return@forEach
-                val mColor = member.avatarColor ?: "#0EA5E9"
-                val latestTs = maxOf(member.lastLocationAt ?: 0L, member.lastSeenAt)
-                val ago = if (member.connectionStatus == MemberConnectionStatus.CONNECTED) null else ConvoyUtils.formatTimeAgo(latestTs)
-                val timeAgo = when {
-                    ago != null -> ago
-                    member.connectionStatus == MemberConnectionStatus.OFFLINE -> "offline"
-                    member.connectionStatus == MemberConnectionStatus.RECONNECTING -> "syncing"
-                    else -> null
-                }
-                val sig = "${member.displayName}_${mColor}_${timeAgo ?: ""}"
-                val icon = memberIconCache.getOrPut(sig) {
-                    createVehicleMarkerIcon(context, member.displayName, mColor, timeAgo)
-                }
-                val newSnippet = when {
-                    timeAgo != null -> "Last seen $timeAgo"
-                    else -> "Speed: ${((member.speed ?: 0.0) * 3.6).toInt()} km/h"
-                }
-
-                val existing = activeMemberMarkers[member.id]
-                val targetLatLng = LatLng(mLat, mLng)
-
-                if (existing != null) {
-                    // Smoothly interpolate position to target coordinates (eliminates stutter and jumping)
-                    val cur = existing.position
-                    val dLat = mLat - cur.latitude
-                    val dLng = mLng - cur.longitude
-                    val distSq = dLat * dLat + dLng * dLng
-                    if (distSq > 1e-14) {
-                        activeMarkerAnimators[member.id]?.cancel()
-                        if (distSq > 0.005) { // Large jump/teleport (>~5km) -> snap directly
-                            existing.position = targetLatLng
-                        } else {
-                            val startLat = cur.latitude
-                            val startLng = cur.longitude
-                            val anim = ValueAnimator.ofFloat(0f, 1f).apply {
-                                duration = 500L
-                                interpolator = DecelerateInterpolator()
-                                addUpdateListener { va ->
-                                    val f = va.animatedFraction.toDouble()
-                                    existing.position = LatLng(
-                                        startLat + (mLat - startLat) * f,
-                                        startLng + (mLng - startLng) * f
-                                    )
-                                }
-                            }
-                            activeMarkerAnimators[member.id] = anim
-                            anim.start()
-                        }
-                    }
-                    if (memberMarkerSignature[member.id] != sig) {
-                        if (icon != null) {
-                            existing.icon = icon
-                        }
-                        memberMarkerSignature[member.id] = sig
-                    }
-                    if (existing.snippet != newSnippet) {
-                        existing.snippet = newSnippet
-                    }
-                } else {
-                    // First time creating marker for this member
-                    val opt = MarkerOptions()
-                        .position(targetLatLng)
-                        .title(member.displayName)
-                        .snippet(newSnippet)
-                    if (icon != null) opt.icon = icon
-                    val marker = map.addMarker(opt)
-                    activeMemberMarkers[member.id] = marker
-                    memberMarkerSignature[member.id] = sig
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("ConvoyMapView", "Failed to update member markers", e)
-        }
+    // Retain member location cache and keep screen projections updated on list changes
+    LaunchedEffect(members, selfClientId) {
+        val currentIds = members.map { it.id }.toSet()
+        memberLastKnownLocations.keys.retainAll(currentIds)
+        mapLibreMap?.let { updateScreenLocations(it) }
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val screenW = constraints.maxWidth.toFloat()
+        val screenH = constraints.maxHeight.toFloat()
+
         // Real MapLibre Map View
         AndroidView(
             factory = { mapView },
@@ -905,11 +909,9 @@ fun ConvoyMapView(
                 .testTag("convoy_map_view")
         )
 
-        // Self Location Puck — only while GPS button is active (Maps / Neshan style)
-        if (isMyLocationActive && (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0)) {
+        // Self Location Puck — always visible when location is known (Maps / Neshan style)
+        if (currentLocation.latitude != 0.0 || currentLocation.longitude != 0.0) {
             val density = LocalDensity.current
-            val screenW = constraints.maxWidth.toFloat()
-            val screenH = constraints.maxHeight.toFloat()
             val pt = selfScreenPoint
 
             if (pt != null && (isNavigating || (pt.x in -120f..(screenW + 120f) && pt.y in -120f..(screenH + 120f)))) {
@@ -926,7 +928,6 @@ fun ConvoyMapView(
                     mapTilt = currentMapTilt,
                     userColor = userColor,
                     initial = selfDisplayName.trim().take(1).uppercase().ifEmpty { "•" },
-                    // absoluteOffset: MapLibre screen pixels are LTR; offset() mirrors X in RTL
                     modifier = Modifier.absoluteOffset {
                         val sizeDp = 52.dp
                         val halfPx = with(density) { (sizeDp / 2f).toPx() }
@@ -936,6 +937,22 @@ fun ConvoyMapView(
                         )
                     }
                 )
+            }
+        }
+
+        // Convoy Member Markers (Compose Overlays - flicker-free, stable, smooth rendering)
+        val validMembers = members.filter { it.id != selfClientId }
+        validMembers.forEach { member ->
+            val pt = memberScreenPoints[member.id]
+            if (pt != null && (pt.x in -150f..(screenW + 150f) && pt.y in -150f..(screenH + 150f))) {
+                key(member.id) {
+                    ConvoyMemberOverlayMarker(
+                        member = member,
+                        screenPoint = pt,
+                        mapTilt = currentMapTilt,
+                        onClick = { onMemberSelected(member) }
+                    )
+                }
             }
         }
 
@@ -1119,17 +1136,24 @@ fun ConvoyMapView(
                     }
 
                     SmallFloatingActionButton(
-                        onClick = onToggleLiveConvoyFraming,
+                        onClick = {
+                            if (isLiveConvoyFramingActive) {
+                                onToggleLiveConvoyFraming()
+                            } else {
+                                onFitAll()
+                            }
+                        },
                         containerColor = if (isLiveConvoyFramingActive) Color(0xFF3B82F6) else if (isDarkMode) NightSlateCard else Color.White,
                         contentColor = if (isLiveConvoyFramingActive) Color.White else MaterialTheme.colorScheme.onSurface,
                         shape = CircleShape,
                         modifier = Modifier
+                            .heightIn(min = 40.dp, max = 48.dp)
                             .size(40.dp)
                             .testTag("map_live_convoy_framing_toggle")
                     ) {
                         Icon(
                             Icons.Default.FitScreen,
-                            contentDescription = if (isLiveConvoyFramingActive) "Reset to Normal View" else "Frame Online Convoy",
+                            contentDescription = if (isLiveConvoyFramingActive) "Reset to Normal View" else "See All Members",
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -1209,22 +1233,27 @@ fun ConvoyMapView(
                     Icon(Icons.Default.Remove, contentDescription = "Zoom Out", modifier = Modifier.size(20.dp))
                 }
 
-                // GPS / my-location — off (gray) until tapped; on (blue) while tracking
-                val gpsActive = isMyLocationActive
+                // GPS / my-location — Neshan / Maps style:
+                // Camera follows ONLY when tapped; manual drag or gesture disables follow
+                val isCameraFollowing = if (isNavigating) followDrivingCamera else followLocationCamera
                 SmallFloatingActionButton(
                     onClick = {
                         if (onMyLocationClick()) {
+                            followLocationCamera = true
+                            if (isNavigating) {
+                                followDrivingCamera = true
+                            }
                             recenterRequestedAt = System.currentTimeMillis()
                         }
                     },
-                    containerColor = if (gpsActive) {
+                    containerColor = if (isCameraFollowing) {
                         CaravanBlue
                     } else if (isDarkMode) {
                         NightSlateCard
                     } else {
                         Color.White
                     },
-                    contentColor = if (gpsActive) Color.White else {
+                    contentColor = if (isCameraFollowing) Color.White else {
                         if (isDarkMode) Color.White.copy(alpha = 0.55f)
                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
                     },
@@ -1499,5 +1528,102 @@ fun SelfPuckOrVehicleArrow(
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold
         )
+    }
+}
+
+/**
+ * High-performance, flicker-free convoy member marker rendered as a Compose overlay.
+ * Eliminates 3D tilted depth-buffer z-fighting and texture reallocations in MapLibre.
+ */
+@Composable
+fun ConvoyMemberOverlayMarker(
+    member: TripMember,
+    screenPoint: PointF,
+    mapTilt: Double,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val mColor = try {
+        Color(android.graphics.Color.parseColor(member.avatarColor ?: "#0EA5E9"))
+    } catch (_: Exception) {
+        CaravanBlue
+    }
+    val latestTs = maxOf(member.lastLocationAt ?: 0L, member.lastSeenAt)
+    val isStale = member.connectionStatus != MemberConnectionStatus.CONNECTED
+    val timeAgo = if (isStale) ConvoyUtils.formatTimeAgo(latestTs) else null
+    val labelText = when {
+        member.connectionStatus == MemberConnectionStatus.OFFLINE && timeAgo != null -> "${member.displayName} • $timeAgo"
+        member.connectionStatus == MemberConnectionStatus.OFFLINE -> "${member.displayName} • offline"
+        member.connectionStatus == MemberConnectionStatus.RECONNECTING && timeAgo != null -> "${member.displayName} • $timeAgo"
+        isStale && timeAgo != null -> "${member.displayName} • $timeAgo"
+        else -> member.displayName
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .absoluteOffset {
+                val halfW = with(density) { 50.dp.toPx() }
+                val totalH = with(density) { 54.dp.toPx() }
+                IntOffset(
+                    x = (screenPoint.x - halfW).roundToInt(),
+                    y = (screenPoint.y - totalH).roundToInt()
+                )
+            }
+            .width(100.dp)
+            .clickable(onClick = onClick)
+    ) {
+        // Label Pill
+        Surface(
+            color = Color(0xEE0F172A),
+            shape = RoundedCornerShape(9.dp),
+            border = BorderStroke(
+                1.dp,
+                if (isStale) Color(0xFFF59E0B) else Color(0xFF475569)
+            ),
+            shadowElevation = 4.dp
+        ) {
+            Text(
+                text = labelText,
+                color = if (isStale) Color(0xFFFBBF24) else Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // Vehicle / Member Circular Badge
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(30.dp)
+                .background(
+                    color = if (isStale) Color(0xFFF59E0B) else Color.White,
+                    shape = CircleShape
+                )
+                .padding(2.dp)
+                .background(color = mColor, shape = CircleShape)
+        ) {
+            if (member.isPerson) {
+                Icon(
+                    Icons.Default.Person,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(15.dp)
+                )
+            } else {
+                Text(
+                    text = member.displayName.trim().take(1).uppercase().ifEmpty { "•" },
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }

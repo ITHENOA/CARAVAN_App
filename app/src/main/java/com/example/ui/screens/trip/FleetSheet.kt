@@ -311,6 +311,7 @@ fun FleetBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 380.dp)
                 .padding(horizontal = 18.dp, vertical = 8.dp)
         ) {
             Row(
@@ -324,12 +325,30 @@ fun FleetBottomSheet(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SmallCircleAction(
-                        icon = Icons.Default.FitScreen,
-                        contentDescription = "Show all members on map",
-                        onClick = onFitAllMembers
-                    )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledTonalButton(
+                        onClick = onFitAllMembers,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .heightIn(min = 36.dp, max = 40.dp)
+                            .testTag("fleet_fit_all_button")
+                    ) {
+                        Icon(
+                            Icons.Default.FitScreen,
+                            contentDescription = "See All",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "See All",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                     SmallCircleAction(
                         icon = if (allMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                         contentDescription = if (allMuted) "Unmute all members" else "Mute all members",
@@ -339,12 +358,12 @@ fun FleetBottomSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 380.dp),
+                    .heightIn(max = 270.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(members, key = { "${it.id}-$presenceTick" }) { member ->

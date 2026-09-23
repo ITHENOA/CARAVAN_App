@@ -226,6 +226,9 @@ fun TripScreen(
             onToggleLiveConvoyFraming = {
                 isLiveConvoyFramingActive = !isLiveConvoyFramingActive
             },
+            onFitAll = {
+                fitAllRequestedAt = System.currentTimeMillis()
+            },
             convoyFramingRadiusMeters = convoyFramingRadiusMeters,
             onLongPressMark = { lat, lng ->
                 if (tripState.isNavigating || tripState.route != null) {

@@ -56,17 +56,25 @@ export default {
 
       const LATEST_APK_URL = "https://github.com/ITHENOA/CARAVAN_App/releases/latest/download/caravan-release.apk";
 
-      if (request.method === "GET" && (url.pathname === "/download" || url.pathname === "/download/latest")) {
+      if (request.method === "GET" && (url.pathname === "/download" || url.pathname === "/download/latest" || url.pathname === "/caravan-release.apk" || url.pathname === "/download/caravan-release.apk")) {
+        try {
+          const assetReq = new Request(new URL("/caravan-release.apk", url.origin));
+          const assetRes = await env.ASSETS.fetch(assetReq);
+          if (assetRes.status === 200 && assetRes.headers.get("content-type") !== "text/html") {
+            return assetRes;
+          }
+        } catch (_) {}
         return Response.redirect(LATEST_APK_URL, 302);
       }
 
       if (request.method === "GET" && url.pathname === "/api/version") {
         return withCors(
           jsonResponse({
-            versionCode: 14,
-            versionName: "3.4.0",
-            changelog: "Real-time convoy synchronization, adaptive map views, smart delta updating, and zero-latency PTT audio.",
-            downloadUrl: LATEST_APK_URL,
+            versionCode: 15,
+            versionName: "3.5.0",
+            changelog: "به‌روزرسانی نسخه ۳.۵.۰ کاروان:\n• رفع کامل لرزش و پرپر زدن آیکون سایر اعضا در حالت درایوینگ (Driving Mode)\n• اصلاح رفتار دکمه GPS و نمایش پایدار مارکر موقعیت مکانی کاربر\n• اضافه شدن دکمه استاندارد See All (دیدن همه اعضا) با ابعاد مناسب در نقشه و لیست کاروان\n• روان‌سازی و انیمیشن سینمایی ترنزیشن‌های دوربین، زاویه و زوم",
+            downloadUrl: `${url.origin}/caravan-release.apk`,
+            sha256: "32d1786eee3b9d541c270957df020e253dff8cb999e9f1ac2a773eaf1a77443e",
             patch: null,
           }),
         );
