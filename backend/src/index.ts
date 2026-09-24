@@ -40,7 +40,12 @@ export default {
     const url = new URL(request.url);
 
     try {
-      if (request.method === "GET" && url.pathname === "/") {
+      if (
+        request.method === "GET" &&
+        (url.pathname === "/api/status" ||
+          (url.pathname === "/" &&
+            request.headers.get("accept")?.includes("application/json") === true))
+      ) {
         return withCors(
           jsonResponse({
             service: "caravan-backend",
@@ -56,14 +61,15 @@ export default {
 
       const LATEST_APK_URL = "https://github.com/ITHENOA/CARAVAN_App/releases/latest/download/caravan-release.apk";
 
-      if (request.method === "GET" && (url.pathname === "/download" || url.pathname === "/download/latest" || url.pathname === "/caravan-release.apk" || url.pathname === "/download/caravan-release.apk")) {
-        try {
-          const assetReq = new Request(new URL("/caravan-release.apk", url.origin));
-          const assetRes = await env.ASSETS.fetch(assetReq);
-          if (assetRes.status === 200 && assetRes.headers.get("content-type") !== "text/html") {
-            return assetRes;
-          }
-        } catch (_) {}
+      if (
+        request.method === "GET" &&
+        (url.pathname === "/download" ||
+          url.pathname === "/download/latest" ||
+          url.pathname === "/caravan-release.apk" ||
+          url.pathname === "/download/caravan-release.apk" ||
+          url.pathname === "/api/download" ||
+          url.pathname === "/api/caravan-release.apk")
+      ) {
         return Response.redirect(LATEST_APK_URL, 302);
       }
 
@@ -73,7 +79,7 @@ export default {
             versionCode: 16,
             versionName: "3.5.1",
             changelog: "به‌روزرسانی نسخه ۳.۵.۱ کاروان:\n• رفع مشکل خاموش شدن GPS در پس‌زمینه و هنگام خاموش بودن صفحه (افزودن مجوز Background Location و حفظ سرویس در Activity Lifecycle)\n• رفع مشکل تم لایت در گوشی‌های با دارک‌مود سیستمی (غیرفعال‌سازی Force Dark اجباری شیائومی و سامسونگ)\n• رفع مشکل پکیج اینستالر گوشی در دانلود و نصب آپدیت (افزودن مجوز REQUEST_INSTALL_PACKAGES و مدیریت نصب منابع ناشناخته)",
-            downloadUrl: `${url.origin}/caravan-release.apk`,
+            downloadUrl: LATEST_APK_URL,
             sha256: "c0ce9d428144a666fec0e4ebb4fda80d4dc61343a3ee28eeccf1f317ab8b5b5a",
             patch: null,
           }),
