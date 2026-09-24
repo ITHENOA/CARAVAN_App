@@ -353,6 +353,8 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                         state.tripName,
                         state.members.size.coerceAtLeast(1)
                     )
+                } else {
+                    com.example.service.CaravanTripForegroundService.stop(getApplication())
                 }
             }
         }
@@ -581,14 +583,11 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun createTrip(name: String, onComplete: (Boolean) -> Unit) {
+        createTrip(name) { success, _ -> onComplete(success) }
+    }
+
+    fun createTrip(name: String, onComplete: (Boolean, String?) -> Unit) {
         val tripName = name.trim().ifEmpty { "${_userProfile.value.displayName}'s Convoy" }
-        _tripState.update {
-            it.copy(
-                inTrip = true,
-                tripName = tripName,
-                connectionStatus = CaravanConnectionStatus.CONNECTING
-            )
-        }
 
         viewModelScope.launch {
             val res = apiClient.createTrip(
@@ -608,40 +607,43 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
                 _tripState.update {
                     it.copy(
+                        inTrip = true,
                         tripId = result.tripId,
                         inviteCode = result.inviteCode,
                         tripName = result.name,
                         isLeader = true,
-                        leaderToken = result.leaderToken
+                        leaderToken = result.leaderToken,
+                        connectionStatus = CaravanConnectionStatus.CONNECTING,
+                        connectionError = null
                     )
                 }
 
                 connectToTrip(result.tripId, result.inviteCode, result.leaderToken)
-                onComplete(true)
-            }.onFailure {
+                onComplete(true, null)
+            }.onFailure { err ->
+                val errorMsg = err.message ?: "Failed to create trip"
                 _tripState.update {
                     it.copy(
+                        inTrip = false,
                         connectionStatus = CaravanConnectionStatus.ERROR,
-                        connectionError = "Failed to create trip"
+                        connectionError = errorMsg
                     )
                 }
-                onComplete(false)
+                com.example.service.CaravanTripForegroundService.stop(getApplication())
+                onComplete(false, errorMsg)
             }
         }
     }
 
     fun joinTrip(codeOrUrl: String, onComplete: (Boolean) -> Unit) {
+        joinTrip(codeOrUrl) { success, _ -> onComplete(success) }
+    }
+
+    fun joinTrip(codeOrUrl: String, onComplete: (Boolean, String?) -> Unit) {
         val inviteCode = InviteQr.parseInviteCode(codeOrUrl)
         if (inviteCode.isBlank()) {
-            onComplete(false)
+            onComplete(false, "Invalid invite code")
             return
-        }
-
-        _tripState.update {
-            it.copy(
-                inTrip = true,
-                connectionStatus = CaravanConnectionStatus.CONNECTING
-            )
         }
 
         viewModelScope.launch {
@@ -657,23 +659,29 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
                 _tripState.update {
                     it.copy(
+                        inTrip = true,
                         tripId = tripId,
                         inviteCode = inviteCode,
                         tripName = "Joining…",
-                        isLeader = false
+                        isLeader = false,
+                        connectionStatus = CaravanConnectionStatus.CONNECTING,
+                        connectionError = null
                     )
                 }
 
                 connectToTrip(tripId, inviteCode, null)
-                onComplete(true)
-            }.onFailure {
+                onComplete(true, null)
+            }.onFailure { err ->
+                val errorMsg = err.message ?: "Trip not found"
                 _tripState.update {
                     it.copy(
+                        inTrip = false,
                         connectionStatus = CaravanConnectionStatus.ERROR,
-                        connectionError = "Trip not found"
+                        connectionError = errorMsg
                     )
                 }
-                onComplete(false)
+                com.example.service.CaravanTripForegroundService.stop(getApplication())
+                onComplete(false, errorMsg)
             }
         }
     }

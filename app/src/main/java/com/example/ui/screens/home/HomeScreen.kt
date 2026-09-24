@@ -62,11 +62,11 @@ fun HomeScreen(
     fun submitJoin(raw: String) {
         if (raw.isBlank() || isSubmitting) return
         isSubmitting = true
-        viewModel.joinTrip(raw) { success ->
+        viewModel.joinTrip(raw) { success, errorMsg ->
             isSubmitting = false
             showJoinDialog = false
             if (success) onNavigateToTrip()
-            else Toast.makeText(context, "Could not join trip", Toast.LENGTH_SHORT).show()
+            else Toast.makeText(context, errorMsg ?: "Could not join trip", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -329,11 +329,11 @@ fun HomeScreen(
                 Button(
                     onClick = {
                         isSubmitting = true
-                        viewModel.createTrip(createTripName) { success ->
+                        viewModel.createTrip(createTripName) { success, errorMsg ->
                             isSubmitting = false
                             showCreateDialog = false
                             if (success) onNavigateToTrip()
-                            else Toast.makeText(context, "Could not create trip", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(context, errorMsg ?: "Could not create trip", Toast.LENGTH_LONG).show()
                         }
                     },
                     enabled = !isSubmitting,

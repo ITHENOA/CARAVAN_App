@@ -76,11 +76,11 @@ export default {
       if (request.method === "GET" && url.pathname === "/api/version") {
         return withCors(
           jsonResponse({
-            versionCode: 16,
-            versionName: "3.5.1",
-            changelog: "به‌روزرسانی نسخه ۳.۵.۱ کاروان:\n• رفع مشکل خاموش شدن GPS در پس‌زمینه و هنگام خاموش بودن صفحه (افزودن مجوز Background Location و حفظ سرویس در Activity Lifecycle)\n• رفع مشکل تم لایت در گوشی‌های با دارک‌مود سیستمی (غیرفعال‌سازی Force Dark اجباری شیائومی و سامسونگ)\n• رفع مشکل پکیج اینستالر گوشی در دانلود و نصب آپدیت (افزودن مجوز REQUEST_INSTALL_PACKAGES و مدیریت نصب منابع ناشناخته)",
+            versionCode: 17,
+            versionName: "3.5.2",
+            changelog: "به‌روزرسانی نسخه ۳.۵.۲ کاروان:\n• رفع مشکل ایجاد سفر جدید و فعال‌سازی مجدد روت سرور Cloudflare\n• رفع نمایش اشتباه نوتیفیکیشن سفر فعال (Leave Convoy) در صورت عدم حضور در سفر\n• اصلاح چرخه حیات سرویس و توقف خودکار هنگام خروج از سفر یا خطای اتصال\n• نمایش پیام‌های خطای واقعی شبکه هنگام ایجاد یا ورود به سفر",
             downloadUrl: LATEST_APK_URL,
-            sha256: "c0ce9d428144a666fec0e4ebb4fda80d4dc61343a3ee28eeccf1f317ab8b5b5a",
+            sha256: "b899f3fc1bd4c9d7110e14ef1cba016184a2ebf14e9365d289b51b92aed38d5a",
             patch: null,
           }),
         );

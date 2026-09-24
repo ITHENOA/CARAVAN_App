@@ -59,7 +59,14 @@ class CaravanTripForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        if (intent == null) {
+            Log.d(TAG, "Stopping foreground service due to null intent")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        when (intent.action) {
             ACTION_STOP -> {
                 Log.d(TAG, "Stopping foreground service")
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -94,8 +101,14 @@ class CaravanTripForegroundService : Service() {
                     }
                 }
             }
+            else -> {
+                Log.d(TAG, "Unknown action ${intent.action}, stopping service")
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun buildNotification(tripName: String, memberCount: Int): Notification {
