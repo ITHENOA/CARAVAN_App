@@ -159,7 +159,11 @@ class LocationProvider(private val context: Context) {
             // Resume listening without reseeding last-known (avoids snap-back)
             startLocationUpdates(force = true, seedFromLastKnown = false)
         }
-        override fun onProviderDisabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {
+            if (provider == LocationManager.GPS_PROVIDER) {
+                isListeningGps = false
+            }
+        }
     }
 
     /**
@@ -259,13 +263,33 @@ class LocationProvider(private val context: Context) {
 
             if (!isListeningGps) {
                 var registered = false
+                val mainLooper = Looper.getMainLooper()
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    try {
+                        if (lm.isProviderEnabled(LocationManager.FUSED_PROVIDER)) {
+                            lm.requestLocationUpdates(
+                                LocationManager.FUSED_PROVIDER,
+                                500L,
+                                0f,
+                                locationListener,
+                                mainLooper
+                            )
+                            registered = true
+                        }
+                    } catch (e: Exception) {
+                        Log.d("LocationProvider", "Fused provider not used: ${e.message}")
+                    }
+                }
+
                 if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                     try {
                         lm.requestLocationUpdates(
                             LocationManager.GPS_PROVIDER,
                             500L,
                             0f,
-                            locationListener
+                            locationListener,
+                            mainLooper
                         )
                         registered = true
                     } catch (e: Exception) {
@@ -278,7 +302,8 @@ class LocationProvider(private val context: Context) {
                             LocationManager.NETWORK_PROVIDER,
                             2000L,
                             5f,
-                            locationListener
+                            locationListener,
+                            mainLooper
                         )
                         registered = true
                     } catch (e: Exception) {

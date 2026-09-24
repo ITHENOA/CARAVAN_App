@@ -50,6 +50,10 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
 
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.decorView.isForceDarkAllowed = false
+        }
+
         setContent {
             val viewModel: CaravanViewModel = viewModel()
             val isDarkMode by viewModel.isDarkMode.collectAsState()
@@ -61,10 +65,14 @@ class MainActivity : ComponentActivity() {
                     val window = (view.context as ComponentActivity).window
                     window.statusBarColor = backgroundColor.toArgb()
                     WindowInsetsControllerCompat(window, view).isAppearanceLightStatusBars = !isDarkMode
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        view.isForceDarkAllowed = false
+                    }
                 }
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    color = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onBackground
                 ) {
                     CaravanApp(viewModel = viewModel)
                 }

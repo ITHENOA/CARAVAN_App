@@ -1915,11 +1915,15 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
-        com.example.service.CaravanTripForegroundService.onLeaveRequested = null
-        com.example.service.CaravanTripForegroundService.stop(getApplication())
-        locationProvider.stopLocationUpdates()
-        pttController.release()
-        wsClient.disconnect()
+        // If the user is actively in a convoy trip, preserve the Foreground Service,
+        // live GPS tracking, and connection across Android Activity recreation or backgrounding.
+        if (!_tripState.value.inTrip) {
+            com.example.service.CaravanTripForegroundService.onLeaveRequested = null
+            com.example.service.CaravanTripForegroundService.stop(getApplication())
+            locationProvider.stopLocationUpdates()
+            pttController.release()
+            wsClient.disconnect()
+        }
     }
 }
 

@@ -12,8 +12,8 @@ android {
         applicationId = "com.aistudio.caravan.kqzvpm"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "3.4.0"
+        versionCode = 16
+        versionName = "3.5.1"
     }
 
     signingConfigs {
@@ -36,8 +36,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildFeatures {
@@ -48,7 +48,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

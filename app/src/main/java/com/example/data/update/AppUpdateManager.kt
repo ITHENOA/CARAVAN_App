@@ -122,7 +122,9 @@ class AppUpdateManager(
         info: UpdateInfo,
         onProgress: (percent: Int, isPatch: Boolean, status: String) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        val updatesDir = File(context.cacheDir, "updates").apply { mkdirs() }
+        val baseDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+            ?: context.filesDir
+        val updatesDir = File(baseDir, "updates").apply { mkdirs() }
         val targetApk = File(updatesDir, "caravan-v${info.versionName}.apk")
 
         if (targetApk.exists() && targetApk.length() > 0) {
@@ -204,16 +206,48 @@ class AppUpdateManager(
      * Prompts the system PackageInstaller to install the downloaded APK.
      */
     fun promptInstall(apkFile: File) {
-        val uri: Uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            apkFile
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!apkFile.exists() || apkFile.length() == 0L) {
+            Log.e(TAG, "Cannot install: APK does not exist or is empty: ${apkFile.absolutePath}")
+            return
         }
-        context.startActivity(intent)
+
+        // Android 8.0+ (API 26+) requires user permission to install unknown apps
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            if (!context.packageManager.canRequestPackageInstalls()) {
+                val settingsIntent = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(settingsIntent)
+                return
+            }
+        }
+
+        try {
+            val uri: Uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                apkFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            // Explicitly grant read URI permissions to any matching package installer activities
+            val resolvedActivities = context.packageManager.queryIntentActivities(
+                intent,
+                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+            )
+            for (res in resolvedActivities) {
+                val pkg = res.activityInfo.packageName
+                context.grantUriPermission(pkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch package installer: ${e.message}", e)
+        }
     }
 }

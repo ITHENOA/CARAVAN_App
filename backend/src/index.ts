@@ -70,11 +70,11 @@ export default {
       if (request.method === "GET" && url.pathname === "/api/version") {
         return withCors(
           jsonResponse({
-            versionCode: 15,
-            versionName: "3.5.0",
-            changelog: "به‌روزرسانی نسخه ۳.۵.۰ کاروان:\n• رفع کامل لرزش و پرپر زدن آیکون سایر اعضا در حالت درایوینگ (Driving Mode)\n• اصلاح رفتار دکمه GPS و نمایش پایدار مارکر موقعیت مکانی کاربر\n• اضافه شدن دکمه استاندارد See All (دیدن همه اعضا) با ابعاد مناسب در نقشه و لیست کاروان\n• روان‌سازی و انیمیشن سینمایی ترنزیشن‌های دوربین، زاویه و زوم",
+            versionCode: 16,
+            versionName: "3.5.1",
+            changelog: "به‌روزرسانی نسخه ۳.۵.۱ کاروان:\n• رفع مشکل خاموش شدن GPS در پس‌زمینه و هنگام خاموش بودن صفحه (افزودن مجوز Background Location و حفظ سرویس در Activity Lifecycle)\n• رفع مشکل تم لایت در گوشی‌های با دارک‌مود سیستمی (غیرفعال‌سازی Force Dark اجباری شیائومی و سامسونگ)\n• رفع مشکل پکیج اینستالر گوشی در دانلود و نصب آپدیت (افزودن مجوز REQUEST_INSTALL_PACKAGES و مدیریت نصب منابع ناشناخته)",
             downloadUrl: `${url.origin}/caravan-release.apk`,
-            sha256: "32d1786eee3b9d541c270957df020e253dff8cb999e9f1ac2a773eaf1a77443e",
+            sha256: "c0ce9d428144a666fec0e4ebb4fda80d4dc61343a3ee28eeccf1f317ab8b5b5a",
             patch: null,
           }),
         );
