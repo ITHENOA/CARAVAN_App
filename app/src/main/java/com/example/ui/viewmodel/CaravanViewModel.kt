@@ -160,7 +160,7 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
                 prefs.dnsCustomSecondary
             )
         } else {
-            okhttp3.Dns.SYSTEM
+            com.example.data.network.DnsPresets.defaultResilientDns()
         }
         apiClient.updateDns(dns)
         wsClient.updateDns(dns)
@@ -589,6 +589,9 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
     fun createTrip(name: String, onComplete: (Boolean, String?) -> Unit) {
         val tripName = name.trim().ifEmpty { "${_userProfile.value.displayName}'s Convoy" }
 
+        applyProxySettings()
+        apiClient.updateBaseUrl(prefs.apiBaseUrl)
+
         viewModelScope.launch {
             val res = apiClient.createTrip(
                 name = tripName,
@@ -645,6 +648,9 @@ class CaravanViewModel(application: Application) : AndroidViewModel(application)
             onComplete(false, "Invalid invite code")
             return
         }
+
+        applyProxySettings()
+        apiClient.updateBaseUrl(prefs.apiBaseUrl)
 
         viewModelScope.launch {
             val lookupRes = apiClient.lookupTrip(inviteCode)

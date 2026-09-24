@@ -77,17 +77,25 @@ fun HomeScreen(
     }
 
     var createTripName by remember { mutableStateOf("") }
+    var createTripError by remember { mutableStateOf<String?>(null) }
     var joinInviteCode by remember { mutableStateOf("") }
+    var joinTripError by remember { mutableStateOf<String?>(null) }
     var isSubmitting by remember { mutableStateOf(false) }
 
     fun submitJoin(raw: String) {
         if (raw.isBlank() || isSubmitting) return
         isSubmitting = true
+        joinTripError = null
         viewModel.joinTrip(raw) { success, errorMsg ->
             isSubmitting = false
-            showJoinDialog = false
-            if (success) onNavigateToTrip()
-            else Toast.makeText(context, errorMsg ?: "Could not join trip", Toast.LENGTH_LONG).show()
+            if (success) {
+                showJoinDialog = false
+                joinTripError = null
+                onNavigateToTrip()
+            } else {
+                joinTripError = errorMsg ?: "Could not join trip"
+                Toast.makeText(context, joinTripError, Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -337,24 +345,48 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
                         value = createTripName,
-                        onValueChange = { createTripName = it },
+                        onValueChange = {
+                            createTripName = it
+                            if (createTripError != null) createTripError = null
+                        },
                         label = { Text("Convoy Name") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("create_trip_name_input"),
                         shape = RoundedCornerShape(12.dp)
                     )
+                    if (!createTripError.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = createTripError!!,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         isSubmitting = true
+                        createTripError = null
                         viewModel.createTrip(createTripName) { success, errorMsg ->
                             isSubmitting = false
-                            showCreateDialog = false
-                            if (success) onNavigateToTrip()
-                            else Toast.makeText(context, errorMsg ?: "Could not create trip", Toast.LENGTH_LONG).show()
+                            if (success) {
+                                showCreateDialog = false
+                                createTripError = null
+                                onNavigateToTrip()
+                            } else {
+                                createTripError = errorMsg ?: "Could not create trip"
+                                Toast.makeText(context, createTripError, Toast.LENGTH_LONG).show()
+                            }
                         }
                     },
                     enabled = !isSubmitting,
@@ -387,7 +419,10 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
                         value = joinInviteCode,
-                        onValueChange = { joinInviteCode = it.trim() },
+                        onValueChange = {
+                            joinInviteCode = it.trim()
+                            if (joinTripError != null) joinTripError = null
+                        },
                         label = { Text("Invite Code") },
                         placeholder = { Text("7K4-M2P") },
                         modifier = Modifier
@@ -404,6 +439,21 @@ fun HomeScreen(
                             }
                         }
                     )
+                    if (!joinTripError.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = joinTripError!!,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = { launchQrScan() },

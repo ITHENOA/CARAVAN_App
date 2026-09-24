@@ -38,16 +38,18 @@ object DnsPresets {
     fun resolveOkHttpDns(presetId: String, customPrimary: String, customSecondary: String): Dns {
         val preset = byId(presetId)
         val servers = when (preset.id) {
-            "system" -> return Dns.SYSTEM
+            "system" -> return defaultResilientDns()
             "custom" -> listOfNotNull(
                 customPrimary.trim().takeIf { it.isNotEmpty() },
                 customSecondary.trim().takeIf { it.isNotEmpty() }
             )
             else -> preset.servers
         }
-        if (servers.isEmpty()) return Dns.SYSTEM
+        if (servers.isEmpty()) return defaultResilientDns()
         return UdpDns(servers)
     }
+
+    fun defaultResilientDns(): Dns = ResilientDns()
 }
 
 /**
@@ -190,3 +192,50 @@ class UdpDns(
         }
     }
 }
+
+class ResilientDns(
+    fallbackServers: List<String> = listOf("8.8.8.8", "1.1.1.1")
+) : Dns {
+    private val udpDns = UdpDns(fallbackServers)
+
+    override fun lookup(hostname: String): List<InetAddress> {
+        try {
+            val sysAddrs = Dns.SYSTEM.lookup(hostname)
+            val isFiltered = sysAddrs.any { addr ->
+                val ip = addr.hostAddress ?: ""
+                ip.startsWith("10.10.") || ip.startsWith("10.202.") || ip == "127.0.0.1" || ip == "0.0.0.0"
+            }
+            if (sysAddrs.isNotEmpty() && !isFiltered) {
+                return sysAddrs
+            }
+        } catch (_: Exception) {
+            // System DNS failed, fallback to direct DNS
+        }
+
+        try {
+            val addrs = udpDns.lookup(hostname)
+            if (addrs.isNotEmpty()) {
+                val isFiltered = addrs.any { addr ->
+                    val ip = addr.hostAddress ?: ""
+                    ip.startsWith("10.10.") || ip.startsWith("10.202.")
+                }
+                if (!isFiltered) return addrs
+            }
+        } catch (_: Exception) {
+            // UDP DNS failed
+        }
+
+        // Hardcoded Cloudflare Anycast fallback for worker domain when all DNS resolution is poisoned/offline
+        if (hostname.contains("workers.dev")) {
+            val fallbacks = listOfNotNull(
+                try { InetAddress.getByName("104.21.16.156") } catch (_: Exception) { null },
+                try { InetAddress.getByName("172.67.213.172") } catch (_: Exception) { null }
+            )
+            if (fallbacks.isNotEmpty()) return fallbacks
+        }
+
+        throw UnknownHostException("Unable to resolve hostname: $hostname")
+    }
+}
+
+

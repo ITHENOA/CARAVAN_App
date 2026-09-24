@@ -21,9 +21,24 @@ sealed class CaravanWsEvent {
 class CaravanWebSocketClient(
     wsBaseUrl: String = "wss://caravan-backend.ithenoa.workers.dev"
 ) {
-    private var wsBaseUrl: String = wsBaseUrl.trim().trimEnd('/')
+    companion object {
+        fun cleanWsUrl(url: String): String {
+            var u = url.trim().trimEnd('/')
+            if (u.endsWith("/ws", ignoreCase = true)) {
+                u = u.substring(0, u.length - 3).trimEnd('/')
+            }
+            if (u.startsWith("http://", ignoreCase = true)) {
+                u = "ws://" + u.substring(7)
+            } else if (u.startsWith("https://", ignoreCase = true)) {
+                u = "wss://" + u.substring(8)
+            }
+            return u.ifBlank { "wss://caravan-backend.ithenoa.workers.dev" }
+        }
+    }
+
+    private var wsBaseUrl: String = cleanWsUrl(wsBaseUrl)
     private var proxy: Proxy? = null
-    private var dns: Dns = Dns.SYSTEM
+    private var dns: Dns = DnsPresets.defaultResilientDns()
     private var client = buildClient()
 
     private var webSocket: WebSocket? = null
@@ -42,7 +57,7 @@ class CaravanWebSocketClient(
     val events = _events.asSharedFlow()
 
     fun updateWsBaseUrl(newBaseUrl: String) {
-        wsBaseUrl = newBaseUrl.trim().trimEnd('/')
+        wsBaseUrl = cleanWsUrl(newBaseUrl)
     }
 
     fun updateDns(dns: Dns) {

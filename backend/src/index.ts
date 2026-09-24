@@ -44,6 +44,8 @@ export default {
       if (
         request.method === "GET" &&
         (pathname === "/api/status" ||
+          pathname === "/status" ||
+          pathname === "/api/api/status" ||
           (pathname === "/" &&
             request.headers.get("accept")?.includes("application/json") === true))
       ) {
@@ -74,28 +76,45 @@ export default {
         return Response.redirect(LATEST_APK_URL, 302);
       }
 
-      if (request.method === "GET" && pathname === "/api/version") {
+      if (
+        request.method === "GET" &&
+        (pathname === "/api/version" ||
+          pathname === "/version" ||
+          pathname === "/api/api/version")
+      ) {
         return withCors(
           jsonResponse({
-            versionCode: 19,
-            versionName: "3.5.4",
-            changelog: "Caravan v3.5.4:\n• Full English localization across all interfaces and dialogs\n• Robust URL path normalization for API and WebSocket connections\n• Enhanced server routing and connection stability",
+            versionCode: 20,
+            versionName: "3.5.5",
+            changelog: "Caravan v3.5.5:\n• Resilient DNS with built-in Cloudflare Anycast fallback\n• Direct inline error feedback for trip creation and joining\n• Full English localization and version indicator\n• Resilient route normalization across all endpoints",
             downloadUrl: LATEST_APK_URL,
-            sha256: "0c09ab5a13b8f93f9a89ea4935c84a8d200091d22e4bb147ecba75c8b06cd7e7",
+            sha256: "223b784fd5df97c18d68d1f50c5284424504b65a41e88173a338b85456d5b171",
             patch: null,
           }),
         );
       }
 
-      if (request.method === "POST" && (pathname === "/api/trips" || pathname === "/api/trips/create")) {
+      if (
+        request.method === "POST" &&
+        (pathname === "/api/trips" ||
+          pathname === "/trips" ||
+          pathname === "/api/api/trips" ||
+          pathname === "/api/trips/create" ||
+          pathname === "/trips/create")
+      ) {
         return withCors(await createTrip(request, env, url));
       }
 
-      if (request.method === "POST" && pathname === "/api/trips/lookup") {
+      if (
+        request.method === "POST" &&
+        (pathname === "/api/trips/lookup" ||
+          pathname === "/trips/lookup" ||
+          pathname === "/api/api/trips/lookup")
+      ) {
         return withCors(await lookupTrip(request, env));
       }
 
-      const tripMeta = pathname.match(/^\/api\/trips\/([^/]+)$/);
+      const tripMeta = pathname.match(/^(?:\/api)?(?:\/api)?\/trips\/([^/]+)$/);
       if (request.method === "GET" && tripMeta) {
         const tripId = decodeURIComponent(tripMeta[1]!);
         const stub = env.TRIPS.get(env.TRIPS.idFromName(tripId));
@@ -107,7 +126,7 @@ export default {
         return withCors(res);
       }
 
-      const tripWs = pathname.match(/^\/trip\/([^/]+)$/);
+      const tripWs = pathname.match(/^(?:\/api)?(?:\/api)?\/trip\/([^/]+)$/);
       if (tripWs) {
         const tripId = decodeURIComponent(tripWs[1]!);
         const stub = env.TRIPS.get(env.TRIPS.idFromName(tripId));

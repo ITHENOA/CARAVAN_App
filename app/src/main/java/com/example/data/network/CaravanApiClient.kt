@@ -36,26 +36,42 @@ data class RouteResult(
 class CaravanApiClient(
     baseUrl: String = "https://caravan-backend.ithenoa.workers.dev"
 ) {
-    private var baseUrl: String = baseUrl.trim().trimEnd('/')
+    companion object {
+        fun cleanBaseUrl(url: String): String {
+            var u = url.trim().trimEnd('/')
+            if (u.endsWith("/api", ignoreCase = true)) {
+                u = u.substring(0, u.length - 4).trimEnd('/')
+            }
+            return u.ifBlank { "https://caravan-backend.ithenoa.workers.dev" }
+        }
+    }
+
+    private var baseUrl: String = cleanBaseUrl(baseUrl)
     private var proxy: Proxy? = null
-    private var dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
+    private var dns: okhttp3.Dns = DnsPresets.defaultResilientDns()
     private var client = buildClient()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     fun updateBaseUrl(newBaseUrl: String) {
-        baseUrl = newBaseUrl.trim().trimEnd('/')
+        baseUrl = cleanBaseUrl(newBaseUrl)
     }
 
     private fun buildEndpointUrl(path: String): String {
         val cleanPath = if (path.startsWith("/")) path else "/$path"
-        return "${baseUrl.trim().trimEnd('/')}$cleanPath"
+        val base = cleanBaseUrl(baseUrl)
+        return if (base.endsWith("/api", ignoreCase = true) && cleanPath.startsWith("/api/", ignoreCase = true)) {
+            "${base.substring(0, base.length - 4)}$cleanPath"
+        } else {
+            "$base$cleanPath"
+        }
     }
 
     fun updateDns(dns: okhttp3.Dns) {
         this.dns = dns
         client = buildClient()
     }
+
 
     /**
      * @param enabled custom proxy; when false, OkHttp uses the JVM/system [java.net.ProxySelector].
@@ -128,7 +144,15 @@ class CaravanApiClient(
                 )
             )
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e("CaravanApi", "createTrip failed", e)
+            val friendlyMsg = when (e) {
+                is java.net.UnknownHostException -> "Cannot connect to server. Check your internet connection or DNS in Settings."
+                is java.net.SocketTimeoutException -> "Server connection timed out. Please try again."
+                is java.net.ConnectException -> "Connection failed. Check your internet or proxy settings."
+                is javax.net.ssl.SSLException -> "Secure connection failed. Check your network or VPN."
+                else -> e.message ?: "Failed to create trip: ${e.javaClass.simpleName}"
+            }
+            Result.failure(Exception(friendlyMsg, e))
         }
     }
 
@@ -159,7 +183,15 @@ class CaravanApiClient(
                 Result.failure(Exception("Trip ID not returned from server"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e("CaravanApi", "lookupTrip failed", e)
+            val friendlyMsg = when (e) {
+                is java.net.UnknownHostException -> "Cannot connect to server. Check your internet connection or DNS in Settings."
+                is java.net.SocketTimeoutException -> "Server connection timed out. Please try again."
+                is java.net.ConnectException -> "Connection failed. Check your internet or proxy settings."
+                is javax.net.ssl.SSLException -> "Secure connection failed. Check your network or VPN."
+                else -> e.message ?: "Failed to lookup trip: ${e.javaClass.simpleName}"
+            }
+            Result.failure(Exception(friendlyMsg, e))
         }
     }
 
