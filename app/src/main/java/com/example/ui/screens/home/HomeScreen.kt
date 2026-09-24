@@ -51,6 +51,13 @@ fun HomeScreen(
     val context = LocalContext.current
     val userProfile by viewModel.userProfile.collectAsState()
     val savedTrips by viewModel.savedTrips.collectAsState()
+    val tripState by viewModel.tripState.collectAsState()
+
+    LaunchedEffect(tripState.inTrip) {
+        if (!tripState.inTrip) {
+            com.example.service.CaravanTripForegroundService.stop(context)
+        }
+    }
 
     var showProfileDialog by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -445,13 +452,13 @@ fun HomeScreen(
             },
             title = {
                 Text(
-                    text = "Exit Caravan (خروج از برنامه)",
+                    text = "Exit Caravan",
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    text = "Are you sure you want to completely exit Caravan?\nآیا مطمئن هستید که می‌خواهید از برنامه خارج شوید؟",
+                    text = "Are you sure you want to completely exit Caravan?",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp
                 )
@@ -470,12 +477,12 @@ fun HomeScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = CaravanCrimson),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Exit (خروج)", fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Exit", fontWeight = FontWeight.Bold, color = Color.White)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showExitConfirmDialog = false }) {
-                    Text("Cancel (انصراف)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )

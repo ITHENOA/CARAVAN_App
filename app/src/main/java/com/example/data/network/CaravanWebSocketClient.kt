@@ -19,8 +19,9 @@ sealed class CaravanWsEvent {
 }
 
 class CaravanWebSocketClient(
-    private var wsBaseUrl: String = "wss://caravan-backend.ithenoa.workers.dev"
+    wsBaseUrl: String = "wss://caravan-backend.ithenoa.workers.dev"
 ) {
+    private var wsBaseUrl: String = wsBaseUrl.trim().trimEnd('/')
     private var proxy: Proxy? = null
     private var dns: Dns = Dns.SYSTEM
     private var client = buildClient()
@@ -41,7 +42,7 @@ class CaravanWebSocketClient(
     val events = _events.asSharedFlow()
 
     fun updateWsBaseUrl(newBaseUrl: String) {
-        wsBaseUrl = newBaseUrl.trimEnd('/')
+        wsBaseUrl = newBaseUrl.trim().trimEnd('/')
     }
 
     fun updateDns(dns: Dns) {
@@ -97,7 +98,8 @@ class CaravanWebSocketClient(
         webSocket?.cancel()
         webSocket = null
 
-        val url = "$wsBaseUrl/trip/$tripId"
+        val cleanTripId = tripId.trim().trimStart('/')
+        val url = "${wsBaseUrl.trim().trimEnd('/')}/trip/$cleanTripId"
         val request = Request.Builder()
             .url(url)
             .build()

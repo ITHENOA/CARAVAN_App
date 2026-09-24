@@ -34,8 +34,9 @@ data class RouteResult(
 )
 
 class CaravanApiClient(
-    private var baseUrl: String = "https://caravan-backend.ithenoa.workers.dev"
+    baseUrl: String = "https://caravan-backend.ithenoa.workers.dev"
 ) {
+    private var baseUrl: String = baseUrl.trim().trimEnd('/')
     private var proxy: Proxy? = null
     private var dns: okhttp3.Dns = okhttp3.Dns.SYSTEM
     private var client = buildClient()
@@ -43,7 +44,12 @@ class CaravanApiClient(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     fun updateBaseUrl(newBaseUrl: String) {
-        baseUrl = newBaseUrl.trimEnd('/')
+        baseUrl = newBaseUrl.trim().trimEnd('/')
+    }
+
+    private fun buildEndpointUrl(path: String): String {
+        val cleanPath = if (path.startsWith("/")) path else "/$path"
+        return "${baseUrl.trim().trimEnd('/')}$cleanPath"
     }
 
     fun updateDns(dns: okhttp3.Dns) {
@@ -96,7 +102,7 @@ class CaravanApiClient(
                 put("clientId", clientId)
             }
             val request = Request.Builder()
-                .url("$baseUrl/api/trips")
+                .url(buildEndpointUrl("/api/trips"))
                 .post(json.toString().toRequestBody(jsonMediaType))
                 .build()
 
@@ -132,7 +138,7 @@ class CaravanApiClient(
                 put("inviteCode", inviteCode.trim())
             }
             val request = Request.Builder()
-                .url("$baseUrl/api/trips/lookup")
+                .url(buildEndpointUrl("/api/trips/lookup"))
                 .post(json.toString().toRequestBody(jsonMediaType))
                 .build()
 

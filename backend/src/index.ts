@@ -38,12 +38,13 @@ export default {
     }
 
     const url = new URL(request.url);
+    const pathname = url.pathname.replace(/\/+/g, "/").replace(/\/+$/, "") || "/";
 
     try {
       if (
         request.method === "GET" &&
-        (url.pathname === "/api/status" ||
-          (url.pathname === "/" &&
+        (pathname === "/api/status" ||
+          (pathname === "/" &&
             request.headers.get("accept")?.includes("application/json") === true))
       ) {
         return withCors(
@@ -55,46 +56,46 @@ export default {
         );
       }
 
-      if (request.method === "GET" && url.pathname === "/health") {
+      if (request.method === "GET" && pathname === "/health") {
         return withCors(jsonResponse({ status: "healthy" }));
       }
 
       const LATEST_APK_URL = "https://github.com/ITHENOA/CARAVAN_App/releases/latest/download/caravan-release.apk";
 
       if (
-        request.method === "GET" &&
-        (url.pathname === "/download" ||
-          url.pathname === "/download/latest" ||
-          url.pathname === "/caravan-release.apk" ||
-          url.pathname === "/download/caravan-release.apk" ||
-          url.pathname === "/api/download" ||
-          url.pathname === "/api/caravan-release.apk")
+        (request.method === "GET" || request.method === "HEAD") &&
+        (pathname === "/download" ||
+          pathname === "/download/latest" ||
+          pathname === "/caravan-release.apk" ||
+          pathname === "/download/caravan-release.apk" ||
+          pathname === "/api/download" ||
+          pathname === "/api/caravan-release.apk")
       ) {
         return Response.redirect(LATEST_APK_URL, 302);
       }
 
-      if (request.method === "GET" && url.pathname === "/api/version") {
+      if (request.method === "GET" && pathname === "/api/version") {
         return withCors(
           jsonResponse({
-            versionCode: 18,
-            versionName: "3.5.3",
-            changelog: "به‌روزرسانی نسخه ۳.۵.۳ کاروان:\n• افزودن دیالوگ تایید خروج هنگام زدن دکمه بازگشت در صفحه اصلی (Back Button Exit Confirmation)\n• خروج کامل و بستن تمامی سرویس‌ها، پراسس و تسک‌های برنامه در صورت تایید کاربر (Clean App Kill)\n• جلوگیری از بسته شدن تصادفی برنامه در صفحه اصلی",
+            versionCode: 19,
+            versionName: "3.5.4",
+            changelog: "Caravan v3.5.4:\n• Full English localization across all interfaces and dialogs\n• Robust URL path normalization for API and WebSocket connections\n• Enhanced server routing and connection stability",
             downloadUrl: LATEST_APK_URL,
-            sha256: "32f0fa3c1fc679b573184fbf68eb13892fbcd38bfa14984db6e7c4ca64f180f4",
+            sha256: "0c09ab5a13b8f93f9a89ea4935c84a8d200091d22e4bb147ecba75c8b06cd7e7",
             patch: null,
           }),
         );
       }
 
-      if (request.method === "POST" && url.pathname === "/api/trips") {
+      if (request.method === "POST" && (pathname === "/api/trips" || pathname === "/api/trips/create")) {
         return withCors(await createTrip(request, env, url));
       }
 
-      if (request.method === "POST" && url.pathname === "/api/trips/lookup") {
+      if (request.method === "POST" && pathname === "/api/trips/lookup") {
         return withCors(await lookupTrip(request, env));
       }
 
-      const tripMeta = url.pathname.match(/^\/api\/trips\/([^/]+)$/);
+      const tripMeta = pathname.match(/^\/api\/trips\/([^/]+)$/);
       if (request.method === "GET" && tripMeta) {
         const tripId = decodeURIComponent(tripMeta[1]!);
         const stub = env.TRIPS.get(env.TRIPS.idFromName(tripId));
@@ -106,11 +107,15 @@ export default {
         return withCors(res);
       }
 
-      const tripWs = url.pathname.match(/^\/trip\/([^/]+)$/);
+      const tripWs = pathname.match(/^\/trip\/([^/]+)$/);
       if (tripWs) {
         const tripId = decodeURIComponent(tripWs[1]!);
         const stub = env.TRIPS.get(env.TRIPS.idFromName(tripId));
         return stub.fetch(request);
+      }
+
+      if (pathname.startsWith("/api/")) {
+        return withCors(errorResponse(404, "NOT_FOUND", "API endpoint not found"));
       }
 
       return env.ASSETS.fetch(request);

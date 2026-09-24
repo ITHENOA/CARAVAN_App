@@ -188,13 +188,15 @@ class PreferencesManager(context: Context) {
 
     var apiBaseUrl: String
         get() = prefs.getString(KEY_API_BASE_URL, "https://caravan-backend.ithenoa.workers.dev")
+            ?.trim()?.trimEnd('/')?.ifBlank { "https://caravan-backend.ithenoa.workers.dev" }
             ?: "https://caravan-backend.ithenoa.workers.dev"
-        set(value) = prefs.edit().putString(KEY_API_BASE_URL, value.trim()).apply()
+        set(value) = prefs.edit().putString(KEY_API_BASE_URL, value.trim().trimEnd('/')).apply()
 
     var wsBaseUrl: String
         get() = prefs.getString(KEY_WS_BASE_URL, "wss://caravan-backend.ithenoa.workers.dev")
+            ?.trim()?.trimEnd('/')?.ifBlank { "wss://caravan-backend.ithenoa.workers.dev" }
             ?: "wss://caravan-backend.ithenoa.workers.dev"
-        set(value) = prefs.edit().putString(KEY_WS_BASE_URL, value.trim()).apply()
+        set(value) = prefs.edit().putString(KEY_WS_BASE_URL, value.trim().trimEnd('/')).apply()
 
     var isMockFleetEnabled: Boolean
         get() = prefs.getBoolean(KEY_MOCK_FLEET, false)

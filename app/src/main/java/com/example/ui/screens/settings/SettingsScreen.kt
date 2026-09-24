@@ -238,12 +238,12 @@ fun SettingsScreen(
                 )
 
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text("Map Style (حالت نقشه)", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)
+                    Text("Map Style", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium)
                     Text(
                         when (mapTheme) {
-                            PreferencesManager.MAP_THEME_DARK -> "Dark Night Map (حالت دارک نقشه)"
-                            PreferencesManager.MAP_THEME_LIGHT -> "Light Day Map (حالت روشن نقشه)"
-                            else -> "Auto (همگام با تم برنامه و حالت شب)"
+                            PreferencesManager.MAP_THEME_DARK -> "Dark Night Map"
+                            PreferencesManager.MAP_THEME_LIGHT -> "Light Day Map"
+                            else -> "Auto (Follow App Theme)"
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
@@ -254,9 +254,9 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         listOf(
-                            PreferencesManager.MAP_THEME_AUTO to "Auto (تم)",
-                            PreferencesManager.MAP_THEME_DARK to "Dark (دارک)",
-                            PreferencesManager.MAP_THEME_LIGHT to "Light (روشن)"
+                            PreferencesManager.MAP_THEME_AUTO to "Auto",
+                            PreferencesManager.MAP_THEME_DARK to "Dark",
+                            PreferencesManager.MAP_THEME_LIGHT to "Light"
                         ).forEach { (mode, label) ->
                             val selected = mapTheme == mode
                             Surface(
