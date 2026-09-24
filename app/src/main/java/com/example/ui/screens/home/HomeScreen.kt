@@ -1,9 +1,11 @@
 package com.example.ui.screens.home
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -53,7 +55,19 @@ fun HomeScreen(
     var showProfileDialog by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
+    var showExitConfirmDialog by remember { mutableStateOf(false) }
     var shareTrip by remember { mutableStateOf<SavedTrip?>(null) }
+
+    BackHandler {
+        when {
+            showCreateDialog -> showCreateDialog = false
+            showJoinDialog -> showJoinDialog = false
+            showProfileDialog -> showProfileDialog = false
+            shareTrip != null -> shareTrip = null
+            showExitConfirmDialog -> showExitConfirmDialog = false
+            else -> showExitConfirmDialog = true
+        }
+    }
 
     var createTripName by remember { mutableStateOf("") }
     var joinInviteCode by remember { mutableStateOf("") }
@@ -414,6 +428,54 @@ fun HomeScreen(
             dismissButton = {
                 TextButton(onClick = { showJoinDialog = false }, enabled = !isSubmitting) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showExitConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirmDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.ExitToApp,
+                    contentDescription = null,
+                    tint = CaravanCrimson
+                )
+            },
+            title = {
+                Text(
+                    text = "Exit Caravan (خروج از برنامه)",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to completely exit Caravan?\nآیا مطمئن هستید که می‌خواهید از برنامه خارج شوید؟",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExitConfirmDialog = false
+                        viewModel.leaveTrip()
+                        com.example.service.CaravanTripForegroundService.stop(context)
+                        val activity = context as? Activity
+                        activity?.finishAffinity()
+                        android.os.Process.killProcess(android.os.Process.myPid())
+                        kotlin.system.exitProcess(0)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = CaravanCrimson),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Exit (خروج)", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitConfirmDialog = false }) {
+                    Text("Cancel (انصراف)", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         )

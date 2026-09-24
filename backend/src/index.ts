@@ -76,11 +76,11 @@ export default {
       if (request.method === "GET" && url.pathname === "/api/version") {
         return withCors(
           jsonResponse({
-            versionCode: 17,
-            versionName: "3.5.2",
-            changelog: "به‌روزرسانی نسخه ۳.۵.۲ کاروان:\n• رفع مشکل ایجاد سفر جدید و فعال‌سازی مجدد روت سرور Cloudflare\n• رفع نمایش اشتباه نوتیفیکیشن سفر فعال (Leave Convoy) در صورت عدم حضور در سفر\n• اصلاح چرخه حیات سرویس و توقف خودکار هنگام خروج از سفر یا خطای اتصال\n• نمایش پیام‌های خطای واقعی شبکه هنگام ایجاد یا ورود به سفر",
+            versionCode: 18,
+            versionName: "3.5.3",
+            changelog: "به‌روزرسانی نسخه ۳.۵.۳ کاروان:\n• افزودن دیالوگ تایید خروج هنگام زدن دکمه بازگشت در صفحه اصلی (Back Button Exit Confirmation)\n• خروج کامل و بستن تمامی سرویس‌ها، پراسس و تسک‌های برنامه در صورت تایید کاربر (Clean App Kill)\n• جلوگیری از بسته شدن تصادفی برنامه در صفحه اصلی",
             downloadUrl: LATEST_APK_URL,
-            sha256: "b899f3fc1bd4c9d7110e14ef1cba016184a2ebf14e9365d289b51b92aed38d5a",
+            sha256: "32f0fa3c1fc679b573184fbf68eb13892fbcd38bfa14984db6e7c4ca64f180f4",
             patch: null,
           }),
         );
