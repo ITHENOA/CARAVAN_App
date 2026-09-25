@@ -1,5 +1,7 @@
 package com.example.ui.screens.settings
 
+import android.content.Context
+import android.media.AudioManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -75,6 +77,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.VolumeMute
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.runtime.mutableFloatStateOf
+import kotlin.math.roundToInt
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import com.example.data.local.PreferencesManager
@@ -366,6 +372,78 @@ fun SettingsScreen(
                             hapticsEnabled = it
                             prefs.isHapticsEnabled = it
                         }
+                    )
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(vertical = 10.dp)
+                )
+
+                // Voice & Media Volume Slider
+                val audioManager = remember(context) {
+                    context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                }
+                val maxVol = remember(audioManager) {
+                    audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15
+                }
+                var musicVolume by remember(audioManager) {
+                    mutableFloatStateOf((audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 10).toFloat())
+                }
+                val volumePercent = if (maxVol > 0) ((musicVolume / maxVol) * 100).roundToInt() else 0
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                if (musicVolume > 0f) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
+                                contentDescription = null,
+                                tint = CaravanBlue,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    "Voice & Media Volume",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    "PTT radio and chime output level",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                        Text(
+                            "$volumePercent%",
+                            color = CaravanBlue,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                    Slider(
+                        value = musicVolume,
+                        onValueChange = { newVal ->
+                            musicVolume = newVal
+                            audioManager?.setStreamVolume(
+                                AudioManager.STREAM_MUSIC,
+                                newVal.roundToInt(),
+                                0
+                            )
+                        },
+                        valueRange = 0f..maxVol.toFloat(),
+                        steps = if (maxVol > 1) maxVol - 1 else 0,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }

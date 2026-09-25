@@ -950,6 +950,7 @@ fun ConvoyMapView(
                         member = member,
                         screenPoint = pt,
                         mapTilt = currentMapTilt,
+                        mapBearing = currentMapBearing,
                         onClick = { onMemberSelected(member) }
                     )
                 }
@@ -1483,7 +1484,7 @@ fun SelfPuckOrVehicleArrow(
         modifier = modifier
             .size(markerSize)
             .graphicsLayer {
-                if (isNavigating) {
+                if (isNavigating || mapTilt > 0.0) {
                     rotationX = mapTilt.toFloat()
                     cameraDistance = 16f * density.density
                     transformOrigin = TransformOrigin(0.5f, 0.85f)
@@ -1533,13 +1534,14 @@ fun SelfPuckOrVehicleArrow(
 
 /**
  * High-performance, flicker-free convoy member marker rendered as a Compose overlay.
- * Eliminates 3D tilted depth-buffer z-fighting and texture reallocations in MapLibre.
+ * Supports 3D perspective tilt aligned with the map ground plane and directional heading pointer.
  */
 @Composable
 fun ConvoyMemberOverlayMarker(
     member: TripMember,
     screenPoint: PointF,
     mapTilt: Double,
+    mapBearing: Double = 0.0,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1560,18 +1562,30 @@ fun ConvoyMemberOverlayMarker(
         else -> member.displayName
     }
 
+    val hasHeading = member.heading != null && !member.isPerson
+    val relativeHeading = if (hasHeading) {
+        ((member.heading!! - mapBearing + 360.0) % 360.0).toFloat()
+    } else 0f
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .absoluteOffset {
                 val halfW = with(density) { 50.dp.toPx() }
-                val totalH = with(density) { 54.dp.toPx() }
+                val totalH = with(density) { 62.dp.toPx() }
                 IntOffset(
                     x = (screenPoint.x - halfW).roundToInt(),
                     y = (screenPoint.y - totalH).roundToInt()
                 )
             }
             .width(100.dp)
+            .graphicsLayer {
+                if (mapTilt > 0.0) {
+                    rotationX = mapTilt.toFloat()
+                    cameraDistance = 16f * density.density
+                    transformOrigin = TransformOrigin(0.5f, 1.0f)
+                }
+            }
             .clickable(onClick = onClick)
     ) {
         // Label Pill
@@ -1597,32 +1611,61 @@ fun ConvoyMemberOverlayMarker(
 
         Spacer(modifier = Modifier.height(2.dp))
 
-        // Vehicle / Member Circular Badge
+        // Vehicle / Member Circular Badge with optional directional heading indicator
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(30.dp)
-                .background(
-                    color = if (isStale) Color(0xFFF59E0B) else Color.White,
-                    shape = CircleShape
-                )
-                .padding(2.dp)
-                .background(color = mColor, shape = CircleShape)
+            modifier = Modifier.size(40.dp)
         ) {
-            if (member.isPerson) {
-                Icon(
-                    Icons.Default.Person,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(15.dp)
-                )
-            } else {
-                Text(
-                    text = member.displayName.trim().take(1).uppercase().ifEmpty { "•" },
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            if (hasHeading) {
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    val coreR = 15.dp.toPx()
+
+                    rotate(degrees = relativeHeading, pivot = Offset(cx, cy)) {
+                        val baseY = cy - coreR - 1.dp.toPx()
+                        val tri = androidx.compose.ui.graphics.Path().apply {
+                            moveTo(cx, baseY - 6.dp.toPx())
+                            lineTo(cx + 4.5.dp.toPx(), baseY)
+                            lineTo(cx - 4.5.dp.toPx(), baseY)
+                            close()
+                        }
+                        drawPath(path = tri, color = if (isStale) Color(0xFFF59E0B) else mColor)
+                        drawPath(
+                            path = tri,
+                            color = Color.White,
+                            style = Stroke(width = 1.2.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                        )
+                    }
+                }
+            }
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(
+                        color = if (isStale) Color(0xFFF59E0B) else Color.White,
+                        shape = CircleShape
+                    )
+                    .padding(2.dp)
+                    .background(color = mColor, shape = CircleShape)
+            ) {
+                if (member.isPerson) {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                } else {
+                    Text(
+                        text = member.displayName.trim().take(1).uppercase().ifEmpty { "•" },
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

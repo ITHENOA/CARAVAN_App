@@ -12,8 +12,8 @@ android {
         applicationId = "com.aistudio.caravan.kqzvpm"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "3.5.6"
+        versionCode = 22
+        versionName = "3.5.7"
     }
 
     signingConfigs {

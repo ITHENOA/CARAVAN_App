@@ -84,11 +84,11 @@ export default {
       ) {
         return withCors(
           jsonResponse({
-            versionCode: 21,
-            versionName: "3.5.6",
-            changelog: "Caravan v3.5.6:\n• Background GPS resilient execution with dedicated HandlerThread and automatic 20s watchdog\n• OEM Light Theme contrast and force-dark fix across Xiaomi, Oppo, Vivo, and Samsung devices\n• In-app update PackageInstaller FileProvider path normalization and direct unknown sources launcher\n• Clean app termination and exit confirmation on back press\n• 100% English UI and localization",
+            versionCode: 22,
+            versionName: "3.5.7",
+            changelog: "Caravan v3.5.7:\n• Responsive 3D map perspective tilt synchronization for all peer markers matching self puck\n• Real-time vehicle directional heading rotation indicator on convoy markers\n• High-contrast peer distance badge in fleet sheet for rapid driving glanceability\n• In-app Voice & Media volume control slider in Settings\n• 100% English UI and localization",
             downloadUrl: LATEST_APK_URL,
-            sha256: "64c17f427b3766aab0664d8bc04f494e2586df6e2d525bcacc27483d16cba7a9",
+            sha256: "629188780004b10d8248a8759e25f8ea099e9cdf50813aaf3ecd3ff5b3a689d2",
             patch: null,
           }),
         );
