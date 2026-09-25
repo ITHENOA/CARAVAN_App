@@ -64,8 +64,11 @@ class MainActivity : ComponentActivity() {
                 SideEffect {
                     val window = (view.context as ComponentActivity).window
                     window.statusBarColor = backgroundColor.toArgb()
-                    WindowInsetsControllerCompat(window, view).isAppearanceLightStatusBars = !isDarkMode
+                    val insetsController = WindowInsetsControllerCompat(window, view)
+                    insetsController.isAppearanceLightStatusBars = !isDarkMode
+                    insetsController.isAppearanceLightNavigationBars = !isDarkMode
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        window.decorView.isForceDarkAllowed = false
                         view.isForceDarkAllowed = false
                     }
                 }

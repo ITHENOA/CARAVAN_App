@@ -208,12 +208,22 @@ class AppUpdateManager(
     fun promptInstall(apkFile: File) {
         if (!apkFile.exists() || apkFile.length() == 0L) {
             Log.e(TAG, "Cannot install: APK does not exist or is empty: ${apkFile.absolutePath}")
+            android.widget.Toast.makeText(
+                context,
+                "Update package is missing or corrupted. Please download again.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             return
         }
 
         // Android 8.0+ (API 26+) requires user permission to install unknown apps
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             if (!context.packageManager.canRequestPackageInstalls()) {
+                android.widget.Toast.makeText(
+                    context,
+                    "Please allow 'Install unknown apps' for Caravan, then tap Install again.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
                 val settingsIntent = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
                     data = Uri.parse("package:${context.packageName}")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -248,6 +258,11 @@ class AppUpdateManager(
             context.startActivity(intent)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch package installer: ${e.message}", e)
+            android.widget.Toast.makeText(
+                context,
+                "Package installer error: ${e.message}",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
         }
     }
 }

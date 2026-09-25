@@ -2,6 +2,7 @@ package com.example.ui.screens.home
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.widget.Toast
@@ -338,6 +339,9 @@ fun HomeScreen(
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { if (!isSubmitting) showCreateDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             title = { Text("Start New Convoy", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
@@ -408,6 +412,9 @@ fun HomeScreen(
     if (showJoinDialog) {
         AlertDialog(
             onDismissRequest = { if (!isSubmitting) showJoinDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             title = { Text("Join Convoy", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
@@ -493,6 +500,9 @@ fun HomeScreen(
     if (showExitConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showExitConfirmDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
             icon = {
                 Icon(
                     imageVector = Icons.Default.ExitToApp,
@@ -519,7 +529,7 @@ fun HomeScreen(
                         showExitConfirmDialog = false
                         viewModel.leaveTrip()
                         com.example.service.CaravanTripForegroundService.stop(context)
-                        val activity = context as? Activity
+                        val activity = context.findActivity()
                         activity?.finishAffinity()
                         android.os.Process.killProcess(android.os.Process.myPid())
                         kotlin.system.exitProcess(0)
@@ -637,6 +647,9 @@ fun InviteShareDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         title = { Text("Share Convoy", fontWeight = FontWeight.Bold) },
         text = {
             Column(
@@ -695,3 +708,13 @@ fun InviteShareDialog(
         }
     )
 }
+
+internal fun android.content.Context.findActivity(): Activity? {
+    var current = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}
+

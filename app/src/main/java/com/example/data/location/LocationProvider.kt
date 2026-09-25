@@ -11,6 +11,8 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import android.view.Surface
@@ -54,6 +56,36 @@ class LocationProvider(private val context: Context) {
     private var mockJob: Job? = null
     private var isListeningGps = false
     private var isListeningSensors = false
+
+    private val providerScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var watchdogJob: Job? = null
+    private var locationThread: HandlerThread? = null
+
+    private fun getOrCreateLocationLooper(): Looper {
+        val thread = locationThread
+        if (thread == null || !thread.isAlive) {
+            val newThread = HandlerThread("CaravanLocationThread").apply { start() }
+            locationThread = newThread
+            return newThread.looper
+        }
+        return thread.looper
+    }
+
+    private fun startWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = providerScope.launch {
+            while (isActive) {
+                delay(15_000L)
+                if (isListeningGps) {
+                    val age = System.currentTimeMillis() - _currentLocation.value.timestamp
+                    if (age > 20_000L && isGpsEnabled()) {
+                        Log.i("LocationProvider", "GPS watchdog triggered: no fix for ${age}ms. Refreshing location listeners...")
+                        startLocationUpdates(force = true, seedFromLastKnown = false)
+                    }
+                }
+            }
+        }
+    }
 
     // Sensor calculations
     private val rotationMatrix = FloatArray(9)
@@ -162,6 +194,13 @@ class LocationProvider(private val context: Context) {
         override fun onProviderDisabled(provider: String) {
             if (provider == LocationManager.GPS_PROVIDER) {
                 isListeningGps = false
+                providerScope.launch {
+                    delay(5_000L)
+                    if (isGpsEnabled()) {
+                        Log.i("LocationProvider", "GPS re-detected after being disabled. Resuming location updates...")
+                        startLocationUpdates(force = true, seedFromLastKnown = false)
+                    }
+                }
             }
         }
     }
@@ -253,6 +292,8 @@ class LocationProvider(private val context: Context) {
                 }
             }
 
+            startWatchdog()
+
             // 2. Re-register listeners when forced or after a failed earlier start
             if (force && isListeningGps) {
                 try {
@@ -263,7 +304,7 @@ class LocationProvider(private val context: Context) {
 
             if (!isListeningGps) {
                 var registered = false
-                val mainLooper = Looper.getMainLooper()
+                val bgLooper = getOrCreateLocationLooper()
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     try {
@@ -273,7 +314,7 @@ class LocationProvider(private val context: Context) {
                                 500L,
                                 0f,
                                 locationListener,
-                                mainLooper
+                                bgLooper
                             )
                             registered = true
                         }
@@ -289,7 +330,7 @@ class LocationProvider(private val context: Context) {
                             500L,
                             0f,
                             locationListener,
-                            mainLooper
+                            bgLooper
                         )
                         registered = true
                     } catch (e: Exception) {
@@ -303,7 +344,7 @@ class LocationProvider(private val context: Context) {
                             2000L,
                             5f,
                             locationListener,
-                            mainLooper
+                            bgLooper
                         )
                         registered = true
                     } catch (e: Exception) {
@@ -416,6 +457,8 @@ class LocationProvider(private val context: Context) {
     }
 
     fun stopLocationUpdates() {
+        watchdogJob?.cancel()
+        watchdogJob = null
         stopSensorUpdates()
         if (isListeningGps && locationManager != null) {
             try {
@@ -423,6 +466,10 @@ class LocationProvider(private val context: Context) {
             } catch (_: Exception) {}
             isListeningGps = false
         }
+        try {
+            locationThread?.quitSafely()
+        } catch (_: Exception) {}
+        locationThread = null
         stopMockFleet()
     }
 

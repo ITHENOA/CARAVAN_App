@@ -84,11 +84,11 @@ export default {
       ) {
         return withCors(
           jsonResponse({
-            versionCode: 20,
-            versionName: "3.5.5",
-            changelog: "Caravan v3.5.5:\n• Resilient DNS with built-in Cloudflare Anycast fallback\n• Direct inline error feedback for trip creation and joining\n• Full English localization and version indicator\n• Resilient route normalization across all endpoints",
+            versionCode: 21,
+            versionName: "3.5.6",
+            changelog: "Caravan v3.5.6:\n• Background GPS resilient execution with dedicated HandlerThread and automatic 20s watchdog\n• OEM Light Theme contrast and force-dark fix across Xiaomi, Oppo, Vivo, and Samsung devices\n• In-app update PackageInstaller FileProvider path normalization and direct unknown sources launcher\n• Clean app termination and exit confirmation on back press\n• 100% English UI and localization",
             downloadUrl: LATEST_APK_URL,
-            sha256: "223b784fd5df97c18d68d1f50c5284424504b65a41e88173a338b85456d5b171",
+            sha256: "64c17f427b3766aab0664d8bc04f494e2586df6e2d525bcacc27483d16cba7a9",
             patch: null,
           }),
         );
