@@ -84,11 +84,11 @@ export default {
       ) {
         return withCors(
           jsonResponse({
-            versionCode: 22,
-            versionName: "3.5.7",
-            changelog: "Caravan v3.5.7:\n• Responsive 3D map perspective tilt synchronization for all peer markers matching self puck\n• Real-time vehicle directional heading rotation indicator on convoy markers\n• High-contrast peer distance badge in fleet sheet for rapid driving glanceability\n• In-app Voice & Media volume control slider in Settings\n• 100% English UI and localization",
+            versionCode: 23,
+            versionName: "3.5.8",
+            changelog: "Caravan v3.5.8:\n• Fixed peer convoy marker flickering during map pan, zoom gestures, and 3D driving navigation\n• Continuous real-time marker tracking with robust per-member fallback projection\n• Expanded viewport culling bounds to prevent edge pop-in\n• 100% English UI and localization",
             downloadUrl: LATEST_APK_URL,
-            sha256: "629188780004b10d8248a8759e25f8ea099e9cdf50813aaf3ecd3ff5b3a689d2",
+            sha256: "086af036c40703e8cb8a6a84042dca2ebb9f687540ff972a5f0875b5fcecfa4e",
             patch: null,
           }),
         );

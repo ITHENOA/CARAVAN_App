@@ -140,6 +140,10 @@ fun ConvoyMapView(
     var followLocationCamera by remember { mutableStateOf(false) }
     var movementBearing by remember { mutableStateOf<Double?>(null) }
     var previousLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    val currentMembers by rememberUpdatedState(members)
+    val currentSelfClientId by rememberUpdatedState(selfClientId)
+    val onMemberSelectedState by rememberUpdatedState(onMemberSelected)
+    val onLongPressMarkState by rememberUpdatedState(onLongPressMark)
     val currentDestination by rememberUpdatedState(destination)
     val currentMarks by rememberUpdatedState(marks)
     val currentLocationState by rememberUpdatedState(currentLocation)
@@ -195,25 +199,42 @@ fun ConvoyMapView(
             currentMapTilt = m.cameraPosition.tilt
             val dest = currentDestination
             if (dest != null) {
-                destScreenPoint = m.projection.toScreenLocation(LatLng(dest.latitude, dest.longitude))
+                try {
+                    val pt = m.projection.toScreenLocation(LatLng(dest.latitude, dest.longitude))
+                    if (pt.x.isFinite() && pt.y.isFinite()) {
+                        destScreenPoint = pt
+                    }
+                } catch (_: Exception) {}
             } else {
                 destScreenPoint = null
             }
             val loc = currentLocationState
             if (loc.latitude != 0.0 || loc.longitude != 0.0) {
-                selfScreenPoint = m.projection.toScreenLocation(LatLng(loc.latitude, loc.longitude))
+                try {
+                    val pt = m.projection.toScreenLocation(LatLng(loc.latitude, loc.longitude))
+                    if (pt.x.isFinite() && pt.y.isFinite()) {
+                        selfScreenPoint = pt
+                    }
+                } catch (_: Exception) {}
             } else {
                 selfScreenPoint = null
             }
             val nextMarks = LinkedHashMap<String, PointF>(currentMarks.size)
             currentMarks.forEach { (id, mark) ->
-                nextMarks[id] = m.projection.toScreenLocation(LatLng(mark.latitude, mark.longitude))
+                try {
+                    val pt = m.projection.toScreenLocation(LatLng(mark.latitude, mark.longitude))
+                    if (pt.x.isFinite() && pt.y.isFinite()) {
+                        nextMarks[id] = pt
+                    }
+                } catch (_: Exception) {}
             }
             markScreenPoints = nextMarks
 
-            val nextMemberPoints = HashMap<String, PointF>(members.size)
-            members.forEach { member ->
-                if (member.id != selfClientId) {
+            val memberList = currentMembers
+            val selfId = currentSelfClientId
+            val nextMemberPoints = HashMap<String, PointF>(memberList.size)
+            memberList.forEach { member ->
+                if (member.id != selfId) {
                     val lat = member.latitude
                     val lng = member.longitude
                     val pos = if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
@@ -222,7 +243,16 @@ fun ConvoyMapView(
                         memberLastKnownLocations[member.id]
                     }
                     if (pos != null) {
-                        nextMemberPoints[member.id] = m.projection.toScreenLocation(pos)
+                        try {
+                            val screenPt = m.projection.toScreenLocation(pos)
+                            if (screenPt.x.isFinite() && screenPt.y.isFinite()) {
+                                nextMemberPoints[member.id] = screenPt
+                            } else {
+                                memberScreenPoints[member.id]?.let { nextMemberPoints[member.id] = it }
+                            }
+                        } catch (_: Exception) {
+                            memberScreenPoints[member.id]?.let { nextMemberPoints[member.id] = it }
+                        }
                     }
                 }
             }
@@ -323,14 +353,14 @@ fun ConvoyMapView(
             }
 
             map.addOnMapLongClickListener { point ->
-                onLongPressMark(point.latitude, point.longitude)
+                onLongPressMarkState(point.latitude, point.longitude)
                 true
             }
 
             map.setOnMarkerClickListener { marker ->
-                val found = members.firstOrNull { it.displayName == marker.title }
+                val found = currentMembers.firstOrNull { it.displayName == marker.title }
                 if (found != null) {
-                    onMemberSelected(found)
+                    onMemberSelectedState(found)
                     return@setOnMarkerClickListener true
                 }
                 true
@@ -892,8 +922,8 @@ fun ConvoyMapView(
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val screenW = constraints.maxWidth.toFloat()
-        val screenH = constraints.maxHeight.toFloat()
+        val screenW = constraints.maxWidth.toFloat().coerceAtLeast(1080f)
+        val screenH = constraints.maxHeight.toFloat().coerceAtLeast(1920f)
 
         // Real MapLibre Map View
         AndroidView(
@@ -914,7 +944,7 @@ fun ConvoyMapView(
             val density = LocalDensity.current
             val pt = selfScreenPoint
 
-            if (pt != null && (isNavigating || (pt.x in -120f..(screenW + 120f) && pt.y in -120f..(screenH + 120f)))) {
+            if (pt != null && (isNavigating || (pt.x in -200f..(screenW + 200f) && pt.y in -200f..(screenH + 200f)))) {
                 val userColor = try {
                     Color(android.graphics.Color.parseColor(selfColorHex))
                 } catch (_: Exception) {
@@ -944,7 +974,7 @@ fun ConvoyMapView(
         val validMembers = members.filter { it.id != selfClientId }
         validMembers.forEach { member ->
             val pt = memberScreenPoints[member.id]
-            if (pt != null && (pt.x in -150f..(screenW + 150f) && pt.y in -150f..(screenH + 150f))) {
+            if (pt != null && (pt.x in -300f..(screenW + 300f) && pt.y in -300f..(screenH + 300f))) {
                 key(member.id) {
                     ConvoyMemberOverlayMarker(
                         member = member,
