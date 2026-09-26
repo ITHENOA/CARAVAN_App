@@ -1,0 +1,34 @@
+{
+  "name": "caravan-backend",
+  "main": "backend/src/index.ts",
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "web",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRIPS",
+        "class_name": "TripRoom"
+      },
+      {
+        "name": "INVITES",
+        "class_name": "InviteBook"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TripRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["InviteBook"]
+    }
+  ]
+}
